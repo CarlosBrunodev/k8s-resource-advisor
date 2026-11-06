@@ -1,0 +1,30 @@
+server {
+  listen 8080;
+  server_name _;
+  root /usr/share/nginx/html;
+  index index.html;
+
+  # sonda de saúde do próprio front-end
+  location = /healthz {
+    access_log off;
+    default_type text/plain;
+    return 200 "ok\n";
+  }
+
+  # API do back-end (Service interno)
+  location /api/ {
+    proxy_pass ${BACKEND_URL};
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_read_timeout 180s;
+  }
+
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+
+  add_header X-Content-Type-Options nosniff always;
+  add_header Referrer-Policy no-referrer always;
+  add_header Content-Security-Policy "default-src 'self'; style-src 'self'; img-src 'self' data:; script-src 'self'" always;
+}

@@ -1,0 +1,129 @@
+# Back-end: ConfigMap com a configuração não sensível, Deployment e Service interno.
+# Credenciais do Prometheus (se houver) vêm do Secret "resource-advisor-prometheus" (ver backend-secret.example.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: resource-advisor-backend
+  labels:
+    app.kubernetes.io/name: resource-advisor
+    app.kubernetes.io/component: backend
+data:
+  # Endereço interno do Service do Prometheus. Ajuste para o seu ambiente.
+  PROMETHEUS_URL: "http://prometheus-operated.monitoring.svc.cluster.local:9090"
+  ANALYSIS_WINDOW_DAYS: "7"          # 7 (padrão) ou 14
+  REFERENCE_PERCENTILE: "95"
+  CPU_LIMIT_PERCENTILE: "99"
+  MEMORY_LIMIT_PERCENTILE: "100"
+  REQUEST_MARGIN_PERCENT: "20"
+  LIMIT_MARGIN_PERCENT: "20"
+  TOLERANCE_PERCENT: "10"
+  THROTTLING_THRESHOLD_PERCENT: "5"
+  MIN_COVERAGE_PERCENT: "80"
+  MIN_HISTORY_HOURS: "24"
+  CACHE_TTL_SECONDS: "300"
+  PROMETHEUS_TIMEOUT_SECONDS: "20"
+  PROMETHEUS_MAX_CONCURRENCY: "4"
+  EXCLUDED_NAMESPACES: "kube-system,kube-public,kube-node-lease"
+  CPU_FLOOR_MILLICORES: "10"
+  MEMORY_FLOOR_MI: "32"
+  PORT: "8080"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resource-advisor-backend
+  labels:
+    app.kubernetes.io/name: resource-advisor
+    app.kubernetes.io/component: backend
+spec:
+  replicas: 1   # o cache é local ao processo; mais de uma réplica calcula em paralelo
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: resource-advisor
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: resource-advisor
+        app.kubernetes.io/component: backend
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: resource-advisor-backend:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: resource-advisor-backend
+          env:
+            # Opcional: autenticação no Prometheus. optional=true permite conexão direta sem credenciais.
+            - name: PROMETHEUS_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: resource-advisor-prometheus
+                  key: bearer-token
+                  optional: true
+            - name: PROMETHEUS_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: resource-advisor-prometheus
+                  key: username
+                  optional: true
+            - name: PROMETHEUS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: resource-advisor-prometheus
+                  key: password
+                  optional: true
+          startupProbe:
+            httpGet:
+              path: /api/health/live
+              port: http
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /api/health/live
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health/ready
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: resource-advisor-backend
+  labels:
+    app.kubernetes.io/name: resource-advisor
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: resource-advisor
+    app.kubernetes.io/component: backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

@@ -1,0 +1,18 @@
+# Aplicação: kubectl apply -k k8s/  (namespace de destino definido pelo -n ou pelo contexto)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: resource-advisor
+resources:
+  - backend.yaml
+  - frontend.yaml
+images:
+  - name: resource-advisor-backend
+    newName: resource-advisor-backend
+    newTag: 0.1.0
+  - name: resource-advisor-frontend
+    newName: resource-advisor-frontend
+    newTag: 0.1.0
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: resource-advisor
+    includeSelectors: false

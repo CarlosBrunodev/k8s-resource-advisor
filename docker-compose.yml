@@ -1,0 +1,30 @@
+# Ambiente local completo: Prometheus falso + back-end + front-end.
+# Use pelo Makefile (make up). Portas podem ser trocadas por variáveis: FRONT_PORT, API_PORT, PROM_PORT.
+services:
+  fake-prometheus:
+    build: ./fake-prometheus
+    ports:
+      - "${PROM_PORT:-9090}:9090"
+    environment:
+      FAKE_RETENTION: "${FAKE_RETENTION:-15d}"
+
+  backend:
+    build: ./backend
+    depends_on:
+      - fake-prometheus
+    ports:
+      - "${API_PORT:-8081}:8080"
+    environment:
+      PROMETHEUS_URL: http://fake-prometheus:9090
+      ANALYSIS_WINDOW_DAYS: "${WINDOW:-7}"
+      CACHE_TTL_SECONDS: "60"
+      EXCLUDED_NAMESPACES: kube-system,kube-public,kube-node-lease
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "${FRONT_PORT:-8080}:8080"
+    environment:
+      BACKEND_URL: http://backend:8080
