@@ -59,12 +59,6 @@ const options = (list, selected) => list.map(
 ).join("");
 
 /* ---------- cabeçalho, banner e erros ---------- */
-function setMeta(win, meta) {
-  const parts = [];
-  if (win) parts.push(`Janela: últimos ${win.days} dias, de ${fmtDate(win.start)} a ${fmtDate(win.end)}`);
-  if (meta) parts.push(`Última coleta: ${fmtDate(meta.lastSuccessfulAt)}`);
-  $("#meta").innerHTML = parts.map((p) => `<span>${esc(p)}</span>`).join("");
-}
 function setCrumbs(html) { $("#crumbs").innerHTML = html; }
 
 function showBanner(meta) {
@@ -89,45 +83,46 @@ async function api(path) {
 }
 
 /* ---------- visão geral ---------- */
-const nsCard = (n) => `
-  <a class="card" href="#/ns/${enc(n.name)}">
-    <div class="card-head">
-      <h3>${esc(n.name)}</h3>
-      <span class="count">${n.workloads} workloads</span>
-    </div>
-    <div class="stack" role="img" aria-label="${n.counts.adequado} adequados, ${n.counts.desvio} com desvio, ${n.counts.pendente} pendentes">
-      <span class="s-ok" data-w="${pct(n.counts.adequado, n.workloads)}"></span>
-      <span class="s-bad" data-w="${pct(n.counts.desvio, n.workloads)}"></span>
-      <span class="s-neutral" data-w="${pct(n.counts.pendente, n.workloads)}"></span>
-    </div>
-    <ul class="legend-inline">
-      <li><span class="dot ok"></span>${n.counts.adequado} adequados</li>
-      <li><span class="dot bad"></span>${n.counts.desvio} com desvio</li>
-      <li><span class="dot neutral"></span>${n.counts.pendente} pendentes</li>
-    </ul>
-    <dl class="kv">
-      <dt>Requests a reduzir</dt><dd>CPU ${fmtCpu(n.capacity.cpu.reclaim)} · Memória ${fmtMem(n.capacity.memory.reclaim)}</dd>
-      <dt>Requests a acrescentar</dt><dd>CPU ${fmtCpu(n.capacity.cpu.add)} · Memória ${fmtMem(n.capacity.memory.add)}</dd>
-    </dl>
-  </a>`;
+/* Página inicial neutra: todos os namespaces no mesmo formato. Status e ajustes aparecem só ao abrir um namespace. */
+function overviewRow(n, maxWorkloads) {
+  return `
+    <tr>
+      <td><a href="#/ns/${enc(n.name)}">${esc(n.name)}</a></td>
+      <td class="bar-cell" aria-hidden="true"><span class="bar-track"><span class="bar" data-w="${pct(n.workloads, maxWorkloads)}"></span></span></td>
+      <td class="num">${n.workloads}</td>
+      <td class="num"><a href="#/ns/${enc(n.name)}" aria-label="Abrir namespace ${esc(n.name)}">Abrir ›</a></td>
+    </tr>`;
+}
 
 async function renderOverview() {
   const data = await api("api/overview");
-  setMeta(data.window, data.meta);
-  setCrumbs("<strong>Visão geral</strong>");
+  setCrumbs("");
   const q = data.quality;
   const retention = q.retentionSeconds == null
     ? "não identificada"
     : `${Math.round(q.retentionSeconds / 86400)} dias${q.retentionSufficient === false ? " (menor que a janela)" : ""}`;
+  const namespaces = data.namespaces;
+  const totalWorkloads = namespaces.reduce((sum, n) => sum + n.workloads, 0);
+  const maxWorkloads = Math.max(0, ...namespaces.map((n) => n.workloads));
+  const rows = namespaces.map((n) => overviewRow(n, maxWorkloads)).join("");
   return `
-    <h1>Visão geral por namespace</h1>
-    <p class="muted">Recomendações apenas para consulta. Os ajustes passam pelo fluxo de deploy ou GitOps da equipe.</p>
-    <section class="cards">
-      ${data.namespaces.length ? data.namespaces.map(nsCard).join("")
-        : '<p class="panel">Nenhum workload com métricas na janela analisada.</p>'}
+    <h1>Namespaces</h1>
+    <p class="muted">Clique em um namespace para ver os workloads e as recomendações.</p>
+    <section class="summary">
+      <div class="stat"><span class="stat-label">Namespaces</span><span class="stat-value">${namespaces.length}</span></div>
+      <div class="stat"><span class="stat-label">Workloads analisados</span><span class="stat-value">${totalWorkloads}</span></div>
+      <div class="stat"><span class="stat-label">Janela de análise</span><span class="stat-value">${data.window.days} dias</span></div>
     </section>
-    <section class="panel">
-      <h2>Qualidade dos dados</h2>
+    <div class="table-wrap">
+      <table class="grid">
+        <thead>
+          <tr><th>Namespace</th><th>Workloads</th><th class="num">Quantidade</th><th class="num"><span class="sr-only">Ação</span></th></tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="4">Nenhum workload com métricas na janela analisada.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <details class="panel">
+      <summary>Dados da coleta</summary>
       <ul class="quality">
         <li>Retenção do Prometheus: ${esc(retention)}</li>
         <li>Workloads analisados: ${q.workloads}. Recentes (histórico menor que a janela): ${q.recentWorkloads}.</li>
@@ -135,7 +130,7 @@ async function renderOverview() {
         <li>Itens sem configuração: ${q.withoutConfig}. Com dados insuficientes: ${q.insufficientData}.</li>
         <li>Containers com throttling de CPU: ${q.throttledContainers}. Com OOMKilled: ${q.oomContainers}.</li>
       </ul>
-    </section>`;
+    </details>`;
 }
 
 /* ---------- namespace ---------- */
@@ -155,7 +150,6 @@ async function renderNamespace(ns, qs) {
   };
   const query = toQuery(filters);
   const data = await api(`api/namespaces/${enc(ns)}?${query}`);
-  setMeta(data.window, data.meta);
   setCrumbs(`<a href="#/">Visão geral</a> / <strong>${esc(ns)}</strong>`);
   const t = data.totals;
   const suffix = query ? `?${query}` : "";
@@ -239,10 +233,10 @@ function chartSeries(c, res, consumption) {
   const cfg = (key) => (c.config[key] || []).map((ch) => [Date.parse(ch.at) / 1000, ch.value]);
   const suggested = (kind) => c.items.find((i) => i.resource === res && i.kind === kind)?.suggested ?? null;
   return [
-    { label: "Consumo (réplica mais carregada)", color: "#1D4ED8", style: "solid", points: consumption },
-    { label: "Request", color: "#102A43", style: "dash", step: true, points: cfg(`${res}_request`) },
-    { label: "Limit", color: "#475569", style: "dot", step: true, points: cfg(`${res}_limit`) },
-    { label: "Sugerido (request)", color: "#1D4ED8", style: "suggest", value: suggested("request") },
+    { label: "Consumo (réplica mais carregada)", color: "#4C8DFF", style: "solid", points: consumption },
+    { label: "Request", color: "#F97316", style: "dash", step: true, points: cfg(`${res}_request`) },
+    { label: "Limit", color: "#D946EF", style: "dot", step: true, points: cfg(`${res}_limit`) },
+    { label: "Sugerido (request)", color: "#14B8A6", style: "suggest", value: suggested("request") },
   ];
 }
 
@@ -422,7 +416,6 @@ function containerSection(c, ci, charts) {
 async function renderDetail(ns, kind, name, qs) {
   const data = await api(`api/namespaces/${enc(ns)}/workloads/${enc(kind)}/${enc(name)}`);
   const w = data.workload;
-  setMeta(null, data.meta);
   const back = `#/ns/${enc(ns)}${qs ? `?${qs}` : ""}`;
   setCrumbs(`<a href="#/">Visão geral</a> / <a href="${back}">${esc(ns)}</a> / <strong>${esc(name)}</strong>`);
   return `
@@ -446,6 +439,182 @@ async function renderDetail(ns, kind, name, qs) {
     ${w.containers.map((c, ci) => containerSection(c, ci, data.charts)).join("")}`;
 }
 
+/* ---------- fórmula (administração) ---------- */
+const FORMULA_FIELDS = [
+  { name: "window_days", label: "Janela de análise (dias)", min: 1, max: 30, step: 1,
+    hint: "Dias de histórico usados em todos os cálculos (1 a 30)." },
+  { name: "reference_percentile", label: "Percentil do consumo de referência", min: 1, max: 100, step: "any",
+    hint: "Base do request. P95: 95% dos instantes ficaram abaixo deste valor." },
+  { name: "request_margin_percent", label: "Margem do request (%)", min: 0, max: 500, step: "any",
+    hint: "Request sugerido = referência × (1 + margem)." },
+  { name: "cpu_limit_percentile", label: "Percentil do pico de CPU (limit)", min: 1, max: 100, step: "any",
+    hint: "Base do limit de CPU. P99 é o padrão." },
+  { name: "memory_limit_percentile", label: "Percentil do pico de memória (limit)", min: 1, max: 100, step: "any",
+    hint: "Base do limit de memória. 100 usa o máximo observado." },
+  { name: "limit_margin_percent", label: "Margem do limit (%)", min: 0, max: 500, step: "any",
+    hint: "Limit sugerido = pico × (1 + margem)." },
+  { name: "tolerance_percent", label: "Tolerância para “adequado” (±%)", min: 0, max: 100, step: "any",
+    hint: "Faixa em torno do valor sugerido que é classificada como adequada." },
+];
+
+const fmtNum = (v) => String(Number(v));
+const pctLabel = (p) => (Number(p) >= 100 ? "máximo" : `P${fmtNum(p)}`);
+
+/* prévia calculada no navegador, só para leitura; o texto oficial vem do back-end após salvar */
+function previewTexts(v) {
+  const days = fmtNum(v.window_days);
+  return {
+    request: `${days} d · ${pctLabel(v.reference_percentile)} · margem ${fmtNum(v.request_margin_percent)}%`,
+    cpuLimit: `${days} d · ${pctLabel(v.cpu_limit_percentile)} · margem ${fmtNum(v.limit_margin_percent)}%`,
+    memoryLimit: `${days} d · ${pctLabel(v.memory_limit_percentile)} · margem ${fmtNum(v.limit_margin_percent)}%`,
+  };
+}
+
+function formulaList(values, texts) {
+  return `
+    <li><strong>Request:</strong> consumo de referência × (1 + ${fmtNum(values.request_margin_percent)}%). Método: ${esc(texts.request)}</li>
+    <li><strong>Limit de CPU:</strong> pico × (1 + ${fmtNum(values.limit_margin_percent)}%). Método: ${esc(texts.cpuLimit)}</li>
+    <li><strong>Limit de memória:</strong> pico × (1 + ${fmtNum(values.limit_margin_percent)}%). Método: ${esc(texts.memoryLimit)}</li>
+    <li><strong>Tolerância:</strong> ±${fmtNum(values.tolerance_percent)}%. Valores fora dessa faixa são classificados como subdimensionado ou superdimensionado.</li>`;
+}
+
+function formField(f, value, editable) {
+  return `
+    <label>${esc(f.label)}
+      <input name="${f.name}" type="number" inputmode="decimal" min="${f.min}" max="${f.max}" step="${f.step}"
+        value="${esc(value)}" aria-describedby="hint-${f.name}"${editable ? "" : " disabled"}>
+      <span class="hint" id="hint-${f.name}">${esc(f.hint)}</span>
+      <span class="field-error" data-error="${f.name}" hidden></span>
+    </label>`;
+}
+
+async function renderAdmin() {
+  const data = await api("api/formula");
+  setCrumbs(`<a href="#/">Visão geral</a> / <strong>Fórmula</strong>`);
+  const { values, texts } = data.formula;
+  const editable = data.editable;
+  const notes = [];
+  if (!editable) notes.push("Edição desabilitada: o back-end não tem ADMIN_TOKEN configurado.");
+  if (!data.persisted) notes.push("A fórmula não está gravada em arquivo (FORMULA_FILE): a edição vale só até o back-end reiniciar.");
+  return `
+    <h1>Fórmula de recomendação</h1>
+    <p class="muted">Os parâmetros valem para todos os namespaces e workloads. Ao salvar, o back-end recalcula os resultados e os gráficos.</p>
+
+    <section class="panel">
+      <h2>Fórmula vigente</h2>
+      <ul class="formula-list" id="formula-current">${formulaList(values, texts)}</ul>
+    </section>
+
+    <section class="panel">
+      <h2>Editar parâmetros</h2>
+      ${notes.map((n) => `<p class="warn">${esc(n)}</p>`).join("")}
+      <form id="formula-form" novalidate>
+        <div class="form-grid">
+          ${FORMULA_FIELDS.map((f) => formField(f, values[f.name], editable)).join("")}
+          <label>Token de administrador
+            <input name="token" type="password" autocomplete="off"${editable ? "" : " disabled"}>
+            <span class="hint">Valor de ADMIN_TOKEN no back-end. O navegador não guarda este token.</span>
+            <span class="field-error" data-error="token" hidden></span>
+          </label>
+        </div>
+        <div class="preview" id="formula-preview" aria-live="polite"></div>
+        <div class="form-actions">
+          <button class="button" type="submit"${editable ? "" : " disabled"}>Salvar e recalcular</button>
+          <button class="button secondary" type="reset">Desfazer alterações</button>
+          <span class="form-status" id="form-status" role="status"></span>
+        </div>
+      </form>
+    </section>`;
+}
+
+function formValues(form) {
+  const out = {};
+  for (const f of FORMULA_FIELDS) {
+    const raw = form.elements[f.name].value.trim();
+    const n = raw === "" ? NaN : Number(raw.replace(",", "."));
+    out[f.name] = Number.isFinite(n) ? n : null;
+  }
+  return out;
+}
+
+function updatePreview(form) {
+  const box = $("#formula-preview", form);
+  const v = formValues(form);
+  if (Object.values(v).some((x) => x === null)) {
+    box.innerHTML = '<p class="muted">Preencha todos os campos para ver a prévia.</p>';
+    return;
+  }
+  const t = previewTexts(v);
+  box.innerHTML = `<p><strong>Prévia (ainda não salva)</strong></p>
+    <p>Request: ${esc(t.request)}</p><p>Limit de CPU: ${esc(t.cpuLimit)}</p><p>Limit de memória: ${esc(t.memoryLimit)}</p>`;
+}
+
+function clearFormErrors(form) {
+  form.querySelectorAll("[data-error]").forEach((el) => { el.hidden = true; el.textContent = ""; });
+  form.querySelectorAll("[aria-invalid]").forEach((el) => el.removeAttribute("aria-invalid"));
+}
+
+function showFieldErrors(form, fields) {
+  for (const [name, message] of Object.entries(fields)) {
+    const err = form.querySelector(`[data-error="${name}"]`);
+    if (err) { err.textContent = message; err.hidden = false; }
+    const input = form.elements[name];
+    if (input) input.setAttribute("aria-invalid", "true");
+  }
+}
+
+async function saveFormula(form) {
+  const status = $("#form-status", form);
+  const submit = form.querySelector('button[type="submit"]');
+  clearFormErrors(form);
+  status.classList.remove("error");
+  status.textContent = "Salvando e recalculando…";
+  submit.disabled = true;
+  try {
+    const res = await fetch("api/formula", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-Admin-Token": form.elements.token.value,
+      },
+      body: JSON.stringify(formValues(form)),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) {
+      showBanner(body.meta);
+      const { values, texts } = body.formula;
+      $("#formula-current").innerHTML = formulaList(values, texts);
+      // o valor salvo passa a ser o padrão do formulário: "Desfazer" volta para ele
+      FORMULA_FIELDS.forEach((f) => { form.elements[f.name].defaultValue = String(values[f.name]); });
+      form.elements.token.value = "";
+      status.textContent = `Fórmula salva. Resultados recalculados às ${new Date(body.generatedAt).toLocaleTimeString("pt-BR")}.`;
+      return;
+    }
+    if (res.status === 400 && body.fields) {
+      showFieldErrors(form, body.fields);
+      status.textContent = "Corrija os campos destacados.";
+    } else {
+      status.textContent = [body.error, body.detail].filter(Boolean).join(": ") || `Erro HTTP ${res.status}`;
+    }
+    status.classList.add("error");
+    if (body.formula) $("#formula-current").innerHTML = formulaList(body.formula.values, body.formula.texts);
+  } catch (err) {
+    status.textContent = `Não foi possível salvar: ${err.message}`;
+    status.classList.add("error");
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+function setTabs(path) {
+  const active = path === "/admin" ? "admin" : "visao";
+  document.querySelectorAll(".tabs a").forEach((a) => {
+    if (a.dataset.tab === active) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  });
+}
+
 /* ---------- roteamento ---------- */
 function parseHash() {
   const raw = location.hash.replace(/^#/, "") || "/";
@@ -455,6 +624,7 @@ function parseHash() {
 
 async function route() {
   const { path, qs } = parseHash();
+  if (path === "/admin") return renderAdmin();
   let m = path.match(/^\/ns\/([^/]+)\/w\/([^/]+)\/([^/]+)$/);
   if (m) return renderDetail(dec(m[1]), dec(m[2]), dec(m[3]), qs);
   m = path.match(/^\/ns\/([^/]+)$/);
@@ -478,6 +648,9 @@ async function render() {
   if (seq !== renderSeq) return; // navegação mais recente já assumiu a tela
   app.innerHTML = html;
   applyLayout();
+  setTabs(parseHash().path);
+  const formEl = app.querySelector("#formula-form");
+  if (formEl) updatePreview(formEl);
   if (focused) {
     const el = app.querySelector(`[name="${focused}"]`);
     if (el) el.focus();
@@ -536,11 +709,22 @@ app.addEventListener("input", (ev) => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => applyFilters(form), 350);
   }
+  const formula = ev.target.closest("#formula-form");
+  if (formula) updatePreview(formula);
+});
+app.addEventListener("reset", (ev) => {
+  if (ev.target.id === "formula-form") {
+    setTimeout(() => { clearFormErrors(ev.target); updatePreview(ev.target); $("#form-status", ev.target).textContent = ""; }, 0);
+  }
 });
 app.addEventListener("submit", (ev) => {
   if (ev.target.id === "filters") {
     ev.preventDefault();
     applyFilters(ev.target);
+  }
+  if (ev.target.id === "formula-form") {
+    ev.preventDefault();
+    saveFormula(ev.target);
   }
 });
 

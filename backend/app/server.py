@@ -1,4 +1,5 @@
 """API HTTP (biblioteca padrão). Rotas em /api/*."""
+import hmac
 import json
 import os
 import re
@@ -9,7 +10,9 @@ from .analysis import (
     ALL_STATUSES, SORT_KEYS, NotFound, export_csv, filter_workloads, namespace_summaries,
     namespace_totals,
 )
+from . import formula
 from .config import Settings
+from .formula import FormulaError
 from .prometheus import PrometheusError
 from .service import AnalysisService
 
@@ -50,6 +53,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self._route("POST")
 
+    def do_PUT(self):
+        self._route("PUT")
+
     def _route(self, method):
         url = urlsplit(self.path)
         path = unquote(url.path).rstrip("/") or "/"
@@ -65,8 +71,15 @@ class Handler(BaseHTTPRequestHandler):
             if method == "POST" and path == "/api/analysis/refresh":
                 snap, _, meta = service.snapshot(force=True)
                 return self._json(200, {"meta": meta, "generatedAt": snap["generatedAt"]})
+            if method == "PUT" and path == "/api/formula":
+                return self._update_formula(service)
             if method != "GET":
                 raise ApiError(405, "método não permitido")
+
+            if path == "/api/formula":
+                return self._json(200, {"formula": service.formula_view(),
+                                        "editable": bool(service.settings.admin_token),
+                                        "persisted": bool(service.settings.formula_file)})
 
             if path == "/api/overview":
                 snap, _, meta = service.snapshot()
@@ -109,8 +122,43 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(503, {"error": "Prometheus indisponível", "detail": str(exc)})
         except NotFound as exc:
             return self._json(404, {"error": str(exc)})
+        except FormulaError as exc:
+            return self._json(400, {"error": "fórmula inválida", "fields": exc.fields})
         except ApiError as exc:
             return self._json(exc.status, {"error": str(exc)})
+
+    def _update_formula(self, service):
+        self._require_admin(service.settings)
+        payload = self._read_json()
+        try:
+            snap, _, meta = service.update_formula(payload)
+        except PrometheusError as exc:
+            # a fórmula já foi gravada e aplicada; só o recálculo falhou
+            return self._json(503, {"error": "Fórmula salva, mas o recálculo falhou",
+                                    "detail": str(exc), "formula": service.formula_view()})
+        except OSError as exc:
+            return self._json(500, {"error": "não foi possível gravar a fórmula", "detail": str(exc)})
+        return self._json(200, {"formula": service.formula_view(), "meta": meta,
+                                "generatedAt": snap["generatedAt"]})
+
+    def _require_admin(self, settings):
+        if not settings.admin_token:
+            raise ApiError(403, "edição desabilitada: defina ADMIN_TOKEN no back-end")
+        supplied = self.headers.get("X-Admin-Token", "")
+        if not hmac.compare_digest(supplied.encode("utf-8"), settings.admin_token.encode("utf-8")):
+            raise ApiError(401, "token de administrador inválido")
+
+    def _read_json(self):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise ApiError(400, "Content-Length inválido")
+        if not 0 < length <= formula.MAX_BODY_BYTES:
+            raise ApiError(400, "corpo ausente ou maior que o permitido")
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            raise ApiError(400, "JSON inválido")
 
     @staticmethod
     def _require_namespace(snap, ns):
@@ -140,7 +188,7 @@ def make_server(service, host="0.0.0.0", port=8080):
 
 
 def main():
-    settings = Settings.from_env()
+    settings = formula.restore(Settings.from_env())
     server = make_server(AnalysisService(settings), port=int(os.environ.get("PORT", "8080")))
     print(f"resource-advisor em http://0.0.0.0:{server.server_address[1]}", flush=True)
     server.serve_forever()

@@ -9,10 +9,16 @@
 <body>
   <header class="topbar">
     <div class="topbar-row">
-      <a class="brand" href="#/">Resource Advisor</a>
-      <nav id="crumbs" class="crumbs" aria-label="Navegação"></nav>
+      <a class="brand" href="#/">
+        <img class="brand-logo" src="assets/dxc-technology.png" alt="DXC Technology" width="150" height="84">
+        <span>Resource Advisor</span>
+      </a>
+      <nav class="tabs" aria-label="Seções">
+        <a href="#/" data-tab="visao">Visão geral</a>
+        <a href="#/admin" data-tab="admin">Fórmula</a>
+      </nav>
     </div>
-    <div id="meta" class="meta" aria-live="polite"></div>
+    <nav id="crumbs" class="crumbs" aria-label="Navegação"></nav>
   </header>
   <div id="banner" class="banner" role="alert" hidden></div>
   <main id="app" class="container" aria-live="polite">

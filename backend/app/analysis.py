@@ -167,7 +167,7 @@ def _status(current, suggested, tolerance):
     return "adequado"
 
 
-def _method(res, kind, s, days):
+def method_text(res, kind, s, days):
     if kind == "request":
         return f"{days} d · {_pct_label(s.reference_percentile)} · margem {s.request_margin * 100:g}%"
     pct = s.cpu_limit_percentile if res == "cpu" else s.memory_limit_percentile
@@ -278,7 +278,7 @@ def _container(name, pods, col, s, header):
             "adjustment": adjustment,
             "status": status,
             "statusLabel": STATUS_LABELS[status],
-            "method": _method(res, kind, s, s.window_days),
+            "method": method_text(res, kind, s, s.window_days),
             "justification": _justification(res, kind, current, ref, sugg, ctx),
         })
 

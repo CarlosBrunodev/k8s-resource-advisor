@@ -27,6 +27,7 @@ data:
   CPU_FLOOR_MILLICORES: "10"
   MEMORY_FLOOR_MI: "32"
   PORT: "8080"
+  FORMULA_FILE: "/data/formula.json"  # fórmula editada pelo admin; persiste no volume resource-advisor-formula
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -51,6 +52,7 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
+        fsGroup: 10001  # o volume da fórmula precisa ser gravável pelo usuário da imagem
       containers:
         - name: backend
           image: carlosbrunodev/k8s-resource-advisor-api:1.0.0
@@ -81,6 +83,13 @@ spec:
                   name: resource-advisor-prometheus
                   key: password
                   optional: true
+            # Opcional: sem este token a edição da fórmula fica desabilitada.
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: resource-advisor-admin
+                  key: token
+                  optional: true
           startupProbe:
             httpGet:
               path: /api/health/live
@@ -110,6 +119,13 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            - name: formula
+              mountPath: /data
+      volumes:
+        - name: formula
+          persistentVolumeClaim:
+            claimName: resource-advisor-formula
 ---
 apiVersion: v1
 kind: Service

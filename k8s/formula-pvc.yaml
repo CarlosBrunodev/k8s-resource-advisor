@@ -1,0 +1,14 @@
+# Volume da fórmula editada pela página de administração (arquivo formula.json).
+# Ajuste storageClassName se o cluster não tiver uma classe padrão.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: resource-advisor-formula
+  labels:
+    app.kubernetes.io/name: resource-advisor
+    app.kubernetes.io/component: backend
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 100Mi

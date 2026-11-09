@@ -2,6 +2,7 @@
 import threading
 import time
 
+from . import formula
 from .analysis import NotFound, analyze, build_charts, iso
 from .prometheus import PrometheusClient, PrometheusError, collect
 
@@ -21,6 +22,7 @@ class AnalysisService:
         )
         self._clock = clock
         self._lock = threading.Lock()  # uma análise por vez; as demais esperam o resultado
+        self._formula_lock = threading.Lock()  # uma edição de fórmula por vez
         self._entry = None             # (snapshot, collected, fetched_at)
         self._expires = 0.0
         self._last_error = None
@@ -55,6 +57,22 @@ class AnalysisService:
         except PrometheusError as exc:
             # com um resultado anterior, o serviço continua respondendo, marcado como desatualizado
             return self._entry is not None, str(exc)
+
+    def formula_view(self):
+        return formula.describe(self.settings)
+
+    def update_formula(self, payload):
+        """Valida, grava e aplica a nova fórmula, e recalcula. Falha do Prometheus propaga após a gravação."""
+        with self._formula_lock:
+            values = formula.validate(payload, formula.current(self.settings))
+            new = formula.apply(self.settings, values)
+            if new.formula_file:
+                formula.save(new)
+            with self._lock:
+                self.settings = new
+                self._entry = None  # o resultado anterior usa a fórmula antiga; sem ele, não há resposta degradada
+                self._expires = 0.0
+        return self.snapshot()
 
     def workload(self, namespace, kind, name):
         snap, col, meta = self.snapshot()

@@ -11,9 +11,11 @@ backend/   API em Python (biblioteca padrão, sem dependências externas)
   app/analysis.py    cálculo de percentis, sugestões, classificação, filtros e CSV
   app/prometheus.py  cliente HTTP do Prometheus e consultas PromQL
   app/service.py     cache com TTL, single-flight e resposta degradada
+  app/formula.py     fórmula editável: validação, aplicação ao cálculo e gravação em arquivo
   app/server.py      rotas /api/* e probes
-  tests/             18 testes (análise, filtros, CSV, API e falhas), com Prometheus simulado
+  tests/             29 testes (análise, filtros, CSV, API, fórmula e falhas), com Prometheus simulado
 frontend/  interface estática (HTML/CSS/JS sem build) servida por nginx, com proxy de /api
+  assets/            imagem da marca usada no canto superior esquerdo
 k8s/       manifests (Deployments, Services, ConfigMap, exemplo de Secret) em kustomize
 ```
 
@@ -68,6 +70,8 @@ Exemplo do enunciado: request de 100m e consumo de referência de 200m com marge
 | `THROTTLING_THRESHOLD_PERCENT` | `5` | Throttling que marca o limit de CPU como subdimensionado |
 | `MIN_COVERAGE_PERCENT` / `MIN_HISTORY_HOURS` | `80` / `24` | Requisitos mínimos de dados |
 | `CACHE_TTL_SECONDS` | `300` | Reutilização do resultado da análise |
+| `ADMIN_TOKEN` | vazio | Token da página de fórmula. Sem ele, a edição fica desabilitada |
+| `FORMULA_FILE` | vazio | Arquivo JSON onde a fórmula editada é gravada. Sem ele, a edição vale só até o reinício |
 | `PROMETHEUS_TIMEOUT_SECONDS` / `PROMETHEUS_MAX_CONCURRENCY` | `20` / `4` | Limites de tempo e de concorrência das consultas |
 | `EXCLUDED_NAMESPACES` | `kube-system,kube-public,kube-node-lease` | Namespaces ignorados |
 | `CPU_FLOOR_MILLICORES` / `MEMORY_FLOOR_MI` | `10` / `32` | Pisos das sugestões |
@@ -84,12 +88,26 @@ Exemplo do enunciado: request de 100m e consumo de referência de 200m com marge
 | GET | `/api/namespaces/{ns}/workloads/{kind}/{name}` | detalhe: containers, itens, réplicas, histórico de configuração, séries para os gráficos, YAML |
 | GET | `/api/namespaces/{ns}/export.csv?q=&status=&resource=&sort=` | CSV com os filtros aplicados (separador `;` e BOM, para o Excel em pt-BR) |
 | POST | `/api/analysis/refresh` | força um novo cálculo |
+| GET | `/api/formula` | parâmetros da fórmula vigente e os textos de método |
+| PUT | `/api/formula` | altera a fórmula (exige cabeçalho `X-Admin-Token`); valida, grava e recalcula |
 
 Status de filtro aceitos: `desvio`, `adequado`, `pendente`, `subdimensionado`, `superdimensionado`,
 `sem_configuracao`, `dados_insuficientes`. `sort`: `ajuste`, `pressao`, `nome`.
 
 Falha do Prometheus: se houver um resultado anterior, a API responde com `meta.stale = true`, o motivo em `meta.error` e a
 hora da última coleta bem-sucedida. A interface mostra um aviso. Nova tentativa a cada 30 s.
+
+## Fórmula editável (página Fórmula)
+
+A aba **Fórmula** permite alterar os parâmetros usados em todos os cálculos: janela de análise, percentil do consumo
+de referência (request), percentil do pico de CPU e de memória (limit), margens do request e do limit, e a tolerância
+de "adequado". Ao salvar, o back-end valida os valores, grava o arquivo `FORMULA_FILE`, descarta o resultado anterior
+e recalcula. Os textos de "Método" e "Justificativa" passam a usar a fórmula nova.
+
+- A alteração exige o token em `ADMIN_TOKEN`. A leitura é pública, como o restante da API.
+- Não há edição de expressão livre: só os parâmetros acima. Um avaliador de expressões seria um próximo passo.
+- No Kubernetes, crie o Secret `resource-advisor-admin` (veja `k8s/backend-secret.example.yaml`). O volume
+  `resource-advisor-formula` (`k8s/formula-pvc.yaml`) guarda `formula.json` e sobrevive a reinícios.
 
 ## Validação local
 
@@ -124,7 +142,7 @@ cd backend && python3 -m unittest discover -s tests -t .
 
 - **Não validado contra um cluster ou Prometheus reais.** Os testes usam um Prometheus simulado, que responde às mesmas
   consultas. A validação T01 e T07 (comparar com consultas diretas em dois namespaces) ainda precisa ser feita no ambiente.
-- **Interface não executada em navegador.** O `app.js` foi revisado, mas não testado em navegador.
+- **Interface testada só em Chromium headless.** As telas e o fluxo da fórmula foram executados, mas não em outros navegadores.
 - **Autorização por namespace não implementada.** O enunciado a condiciona a restrições de acesso entre equipes; hoje a API
   expõe todos os namespaces que não estão em `EXCLUDED_NAMESPACES`.
 - **Percentis sobre o passo da consulta.** As séries de CPU têm a resolução do passo (15 ou 30 min). Picos curtos de CPU podem

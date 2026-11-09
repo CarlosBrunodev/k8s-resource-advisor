@@ -33,6 +33,8 @@ class Settings:
     excluded_namespaces: tuple
     cpu_floor_m: int
     memory_floor_mi: int
+    admin_token: str | None = None   # habilita a edição da fórmula (cabeçalho X-Admin-Token)
+    formula_file: str | None = None  # arquivo JSON com a fórmula editada; sem ele, a edição vale só até reiniciar
 
     @classmethod
     def from_env(cls):
@@ -66,4 +68,6 @@ class Settings:
             excluded_namespaces=tuple(n.strip() for n in excluded.split(",") if n.strip()),
             cpu_floor_m=int(_env("CPU_FLOOR_MILLICORES", "10")),
             memory_floor_mi=int(_env("MEMORY_FLOOR_MI", "32")),
+            admin_token=_env("ADMIN_TOKEN"),
+            formula_file=_env("FORMULA_FILE"),
         )

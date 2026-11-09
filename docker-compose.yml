@@ -19,6 +19,10 @@ services:
       ANALYSIS_WINDOW_DAYS: "${WINDOW:-7}"
       CACHE_TTL_SECONDS: "60"
       EXCLUDED_NAMESPACES: kube-system,kube-public,kube-node-lease
+      FORMULA_FILE: /data/formula.json
+      ADMIN_TOKEN: "${ADMIN_TOKEN:-}"  # sem valor, a edição da fórmula fica desabilitada
+    volumes:
+      - formula:/data
 
   frontend:
     build: ./frontend
@@ -28,3 +32,6 @@ services:
       - "${FRONT_PORT:-8080}:8080"
     environment:
       BACKEND_URL: http://backend:8080
+
+volumes:
+  formula:
