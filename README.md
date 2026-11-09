@@ -17,6 +17,12 @@ frontend/  interface estática (HTML/CSS/JS sem build) servida por nginx, com pr
 k8s/       manifests (Deployments, Services, ConfigMap, exemplo de Secret) em kustomize
 ```
 
+## Documentação
+
+- [docs/METODOLOGIA.md](docs/METODOLOGIA.md): metodologia de cálculo, justificativas e limitações, com diagramas de arquitetura e de fluxo.
+- [docs/arquitetura.svg](docs/arquitetura.svg): diagrama de arquitetura.
+- [docs/validacao-promql.md](docs/validacao-promql.md): consultas PromQL para conferir uma sugestão no Prometheus.
+
 ## Métricas consultadas
 
 | Finalidade | Métrica |

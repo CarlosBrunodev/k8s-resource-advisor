@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 470" width="1000" height="470" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <title>Arquitetura do Resource Advisor</title>
+  <defs>
+    <marker id="seta" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="470" fill="#ffffff"/>
+
+  <!-- Usuário -->
+  <rect x="30" y="165" width="150" height="80" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+  <text x="105" y="198" text-anchor="middle" font-size="15" font-weight="600" fill="#0f172a">Usuário</text>
+  <text x="105" y="218" text-anchor="middle" font-size="12" fill="#475569">navegador</text>
+
+  <!-- Namespace resource-advisor -->
+  <rect x="220" y="40" width="400" height="310" rx="14" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="240" y="62" font-size="13" font-weight="600" fill="#334155">namespace resource-advisor</text>
+
+  <!-- Front-end -->
+  <rect x="245" y="110" width="170" height="70" rx="8" fill="#e0f2fe" stroke="#0369a1" stroke-width="1.5"/>
+  <text x="330" y="138" text-anchor="middle" font-size="14" font-weight="600" fill="#0c4a6e">Front-end</text>
+  <text x="330" y="157" text-anchor="middle" font-size="11" fill="#0c4a6e">nginx · 2 réplicas</text>
+  <text x="330" y="172" text-anchor="middle" font-size="11" fill="#0c4a6e">proxy /api/</text>
+
+  <!-- Back-end -->
+  <rect x="475" y="110" width="125" height="70" rx="8" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+  <text x="537" y="138" text-anchor="middle" font-size="14" font-weight="600" fill="#14532d">Back-end</text>
+  <text x="537" y="157" text-anchor="middle" font-size="11" fill="#14532d">Python · 1 réplica</text>
+  <text x="537" y="172" text-anchor="middle" font-size="11" fill="#14532d">análise e API</text>
+
+  <!-- Cache -->
+  <rect x="475" y="220" width="125" height="50" rx="8" fill="#fef9c3" stroke="#a16207" stroke-width="1.5"/>
+  <text x="537" y="242" text-anchor="middle" font-size="12" font-weight="600" fill="#713f12">Cache em memória</text>
+  <text x="537" y="258" text-anchor="middle" font-size="11" fill="#713f12">TTL 300 s</text>
+
+  <!-- ConfigMap e Secret -->
+  <rect x="245" y="220" width="170" height="50" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.2"/>
+  <text x="330" y="242" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">ConfigMap</text>
+  <text x="330" y="258" text-anchor="middle" font-size="11" fill="#475569">parâmetros da análise</text>
+
+  <rect x="245" y="285" width="170" height="50" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="330" y="307" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">Secret (opcional)</text>
+  <text x="330" y="323" text-anchor="middle" font-size="11" fill="#475569">token ou usuário/senha</text>
+
+  <!-- Prometheus -->
+  <rect x="700" y="40" width="270" height="150" rx="14" fill="#fff7ed" stroke="#c2410c" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="720" y="62" font-size="13" font-weight="600" fill="#7c2d12">namespace cattle-monitoring-system</text>
+  <rect x="725" y="80" width="220" height="60" rx="8" fill="#ffedd5" stroke="#c2410c" stroke-width="1.5"/>
+  <text x="835" y="106" text-anchor="middle" font-size="14" font-weight="600" fill="#7c2d12">Prometheus</text>
+  <text x="835" y="125" text-anchor="middle" font-size="11" fill="#7c2d12">rancher-monitoring · :9090</text>
+
+  <!-- Fontes de métricas -->
+  <rect x="700" y="250" width="120" height="60" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.2"/>
+  <text x="760" y="276" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">kubelet</text>
+  <text x="760" y="293" text-anchor="middle" font-size="11" fill="#475569">cAdvisor · container_*</text>
+
+  <rect x="850" y="250" width="120" height="60" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.2"/>
+  <text x="910" y="276" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">kube-state-</text>
+  <text x="910" y="291" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">metrics</text>
+  <text x="910" y="305" text-anchor="middle" font-size="11" fill="#475569">kube_*</text>
+
+  <!-- Setas -->
+  <line x1="180" y1="205" x2="245" y2="145" stroke="#475569" stroke-width="1.5" marker-end="url(#seta)"/>
+  <text x="196" y="168" font-size="11" fill="#475569">HTTP :80</text>
+
+  <line x1="415" y1="145" x2="475" y2="145" stroke="#475569" stroke-width="1.5" marker-end="url(#seta)"/>
+  <text x="418" y="136" font-size="11" fill="#475569">/api/</text>
+
+  <line x1="600" y1="140" x2="725" y2="110" stroke="#475569" stroke-width="1.5" marker-end="url(#seta)"/>
+  <text x="630" y="112" font-size="11" fill="#475569">PromQL</text>
+
+  <line x1="537" y1="180" x2="537" y2="220" stroke="#475569" stroke-width="1.2" stroke-dasharray="4 3"/>
+
+  <line x1="750" y1="140" x2="760" y2="250" stroke="#475569" stroke-width="1.5" marker-end="url(#seta)"/>
+  <text x="762" y="205" font-size="11" fill="#475569">scrape</text>
+
+  <line x1="840" y1="140" x2="910" y2="250" stroke="#475569" stroke-width="1.5" marker-end="url(#seta)"/>
+  <text x="872" y="205" font-size="11" fill="#475569">scrape</text>
+
+  <!-- Legenda -->
+  <text x="30" y="420" font-size="12" fill="#334155">Somente leitura: o app não altera o cluster. As sugestões seguem para revisão e para o fluxo de GitOps da equipe.</text>
+  <text x="30" y="440" font-size="11" fill="#64748b">Linha tracejada: dependência de configuração ou cache. Detalhes em docs/METODOLOGIA.md.</text>
+</svg>

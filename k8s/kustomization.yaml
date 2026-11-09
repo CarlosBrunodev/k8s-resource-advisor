@@ -7,11 +7,11 @@ resources:
   - frontend.yaml
 images:
   - name: resource-advisor-backend
-    newName: resource-advisor-backend
-    newTag: 0.1.0
+    newName: carlosbrunodev/k8s-resource-advisor-api
+    newTag: 1.0.0
   - name: resource-advisor-frontend
-    newName: resource-advisor-frontend
-    newTag: 0.1.0
+    newName: carlosbrunodev/k8s-resource-advisor-frt
+    newTag: 1.0.0
 labels:
   - pairs:
       app.kubernetes.io/part-of: resource-advisor
