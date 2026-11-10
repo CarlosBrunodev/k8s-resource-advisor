@@ -11,11 +11,24 @@ API_PORT     ?= 8081
 PROM_PORT    ?= 9090
 export WINDOW FRONT_PORT API_PORT PROM_PORT
 
+# Publicação: o repositório de cada imagem vem da linha 'image:' dos manifests de deploy (sem a tag).
+API_IMAGE := $(shell grep -m1 'image:' k8s/backend.yaml | sed 's/.*image: *//; s/:[^:/]*$$//')
+FRT_IMAGE := $(shell grep -m1 'image:' k8s/frontend.yaml | sed 's/.*image: *//; s/:[^:/]*$$//')
+
+# Permite 'make tag 2.1.1': o número que vem depois de 'tag' vira a versão (e não um alvo).
+ifeq ($(firstword $(MAKECMDGOALS)),tag)
+TAG_VERSION := $(word 2,$(MAKECMDGOALS))
+ifneq ($(TAG_VERSION),)
+$(eval $(TAG_VERSION):;@:)
+endif
+endif
+VERSION ?= $(TAG_VERSION)
+
 # Falha cedo com diagnóstico quando nenhum Compose está acessível.
 REQUIRE_COMPOSE = @test -n '$(COMPOSE_BIN)' || { echo 'ERRO: Docker Compose não encontrado. Rode: make doctor'; exit 1; }
 
 .DEFAULT_GOAL := help
-.PHONY: help build up wait urls down restart logs ps test check reset clean doctor
+.PHONY: help build up wait urls down restart logs ps test check reset clean doctor tag
 
 help: ## Lista os comandos
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -80,6 +93,16 @@ clean: ## Derruba tudo e remove as imagens locais construídas por este projeto
 	$(REQUIRE_COMPOSE)
 	$(COMPOSE) down -v --rmi local
 
+
+tag: ## Constrói e publica as duas imagens com a versão informada. Uso: make tag 2.1.1
+	@test -n '$(VERSION)' || { echo 'ERRO: informe a versão. Exemplo: make tag 2.1.1'; exit 1; }
+	@test -n '$(API_IMAGE)' -a -n '$(FRT_IMAGE)' || { echo 'ERRO: não consegui ler as imagens de k8s/*.yaml'; exit 1; }
+	@echo "Back-end:  $(API_IMAGE):$(VERSION)"
+	@echo "Front-end: $(FRT_IMAGE):$(VERSION)"
+	docker build -t $(API_IMAGE):$(VERSION) backend/
+	docker build -t $(FRT_IMAGE):$(VERSION) frontend/
+	docker push $(API_IMAGE):$(VERSION)
+	docker push $(FRT_IMAGE):$(VERSION)
 
 doctor: ## Mostra qual Docker/Compose será usado e se o Docker está acessível
 	@docker --version

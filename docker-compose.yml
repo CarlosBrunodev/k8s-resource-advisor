@@ -20,7 +20,8 @@ services:
       CACHE_TTL_SECONDS: "60"
       EXCLUDED_NAMESPACES: kube-system,kube-public,kube-node-lease
       FORMULA_FILE: /data/formula.json
-      ADMIN_TOKEN: "${ADMIN_TOKEN:-}"  # sem valor, a edição da fórmula fica desabilitada
+      ADMIN_FILE: /data/admin.json  # senha gerada no primeiro boot (ver LOCAL.md)
+      ALLOW_CLUSTER_CHANGES: "${ALLOW_CLUSTER_CHANGES:-false}"  # sem cluster, a escrita falha com 503
     volumes:
       - formula:/data
 

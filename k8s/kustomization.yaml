@@ -4,15 +4,16 @@ kind: Kustomization
 namespace: resource-advisor
 resources:
   - formula-pvc.yaml
+  - rbac.yaml
   - backend.yaml
   - frontend.yaml
 images:
   - name: resource-advisor-backend
     newName: carlosbrunodev/k8s-resource-advisor-api
-    newTag: 1.0.0
+    newTag: 2.1.0
   - name: resource-advisor-frontend
     newName: carlosbrunodev/k8s-resource-advisor-frt
-    newTag: 1.0.0
+    newTag: 2.1.0
 labels:
   - pairs:
       app.kubernetes.io/part-of: resource-advisor

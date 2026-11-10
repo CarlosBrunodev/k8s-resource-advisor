@@ -2,7 +2,8 @@
 
 Aplicação de consulta que compara o consumo real de CPU e memória com os `requests` e `limits` configurados,
 usando o Prometheus, e recomenda ajustes por namespace → workload → container → réplica.
-Modo somente leitura: nenhum recurso do cluster é alterado. Os ajustes passam pelo fluxo de deploy ou GitOps da equipe.
+Por padrão é somente leitura: nenhum recurso do cluster é alterado. Os ajustes passam pelo fluxo de deploy ou GitOps da equipe.
+Com `ALLOW_CLUSTER_CHANGES=true`, a tela oferece dois botões de aplicação (veja [Aplicar no cluster](#aplicar-no-cluster)).
 
 ## Estrutura
 
@@ -43,10 +44,10 @@ k8s/       manifests (Deployments, Services, ConfigMap, exemplo de Secret) em ku
 | Item | Regra padrão |
 |---|---|
 | Consumo de referência | P95 do consumo de cada réplica; o workload usa o **maior** valor entre as réplicas |
-| `request` sugerido | referência × (1 + 20%), com piso de 10m e 32Mi |
-| `limit` sugerido | CPU: P99 × (1 + 20%). Memória: máximo × (1 + 20%). Nunca abaixo do request sugerido |
+| `request` sugerido | referência × (1 + 20%), com piso de 100m (CPU) e 32Mi (memória) |
+| `limit` sugerido | CPU: P99 × (1 + 20%), com piso de 250m. Memória: máximo × (1 + 20%). Nunca abaixo do request sugerido |
 | Classificação | compara o atual com o sugerido e aceita ±10% de tolerância |
-| Override de CPU | throttling ≥ 5% no limit → **subdimensionado** |
+| Override de CPU | throttling ≥ 5% no limit → **subdimensionado**; o limit sugerido é o maior valor entre P99 × (1 + 20%) e limit atual × (1 + 20%), ou seja, sobe em passos enquanto houver throttling |
 | Override de memória | OOMKilled na janela no limit → **subdimensionado** |
 | Dados insuficientes | cobertura < 80% ou histórico < 24 h → sem sugestão |
 | Sem configuração | request ou limit ausente no container |
@@ -70,11 +71,15 @@ Exemplo do enunciado: request de 100m e consumo de referência de 200m com marge
 | `THROTTLING_THRESHOLD_PERCENT` | `5` | Throttling que marca o limit de CPU como subdimensionado |
 | `MIN_COVERAGE_PERCENT` / `MIN_HISTORY_HOURS` | `80` / `24` | Requisitos mínimos de dados |
 | `CACHE_TTL_SECONDS` | `300` | Reutilização do resultado da análise |
-| `ADMIN_TOKEN` | vazio | Token da página de fórmula. Sem ele, a edição fica desabilitada |
+| `ADMIN_USER` | `passuser` | Usuário da edição da fórmula e das aplicações no cluster |
+| `ADMIN_SECRET` | `resource-advisor-admin` | Secret (dentro do cluster) onde a senha gerada fica guardada |
+| `ADMIN_FILE` | vazio | Fora do cluster: arquivo JSON onde a senha gerada fica guardada |
 | `FORMULA_FILE` | vazio | Arquivo JSON onde a fórmula editada é gravada. Sem ele, a edição vale só até o reinício |
+| `ALLOW_CLUSTER_CHANGES` | `false` | `true` habilita os botões que escrevem no cluster (exige a senha de administrador e as permissões de `k8s/rbac.yaml`) |
 | `PROMETHEUS_TIMEOUT_SECONDS` / `PROMETHEUS_MAX_CONCURRENCY` | `20` / `4` | Limites de tempo e de concorrência das consultas |
 | `EXCLUDED_NAMESPACES` | `kube-system,kube-public,kube-node-lease` | Namespaces ignorados |
-| `CPU_FLOOR_MILLICORES` / `MEMORY_FLOOR_MI` | `10` / `32` | Pisos das sugestões |
+| `CPU_FLOOR_MILLICORES` / `MEMORY_FLOOR_MI` | `100` / `32` | Pisos das sugestões de request de CPU e de request de memória |
+| `CPU_LIMIT_FLOOR_MILLICORES` | `250` | Piso do limit de CPU sugerido (boa prática: nunca sugerir abaixo disso) |
 
 ## Endpoints
 
@@ -84,12 +89,15 @@ Exemplo do enunciado: request de 100m e consumo de referência de 200m com marge
 | GET | `/api/health/ready` | readiness: 200 se o Prometheus responde ou há resultado anterior; 503 caso contrário |
 | GET | `/api/overview` | cartões por namespace, janela, qualidade dos dados |
 | GET | `/api/namespaces` | lista de namespaces com resumo |
+| GET | `/api/nodes` | workers e control plane: alocável, requests e limits por node (% do alocável), livre para agendar, desbalanceamento entre workers |
+| GET | `/api/nodes/{name}` | containers agendados no node, com request e limit de CPU e memória |
 | GET | `/api/namespaces/{ns}?q=&status=&resource=&sort=` | workloads filtrados, totais de capacidade |
 | GET | `/api/namespaces/{ns}/workloads/{kind}/{name}` | detalhe: containers, itens, réplicas, histórico de configuração, séries para os gráficos, YAML |
 | GET | `/api/namespaces/{ns}/export.csv?q=&status=&resource=&sort=` | CSV com os filtros aplicados (separador `;` e BOM, para o Excel em pt-BR) |
 | POST | `/api/analysis/refresh` | força um novo cálculo |
+| POST | `/api/namespaces/{ns}/workloads/{kind}/{name}/apply` | aplica a sugestão de um container (`{"container", "target": "workload" \| "pods"}`); exige usuário e senha (HTTP Basic) e `ALLOW_CLUSTER_CHANGES=true` |
 | GET | `/api/formula` | parâmetros da fórmula vigente e os textos de método |
-| PUT | `/api/formula` | altera a fórmula (exige cabeçalho `X-Admin-Token`); valida, grava e recalcula |
+| PUT | `/api/formula` | altera a fórmula (exige usuário e senha, HTTP Basic); valida, grava e recalcula |
 
 Status de filtro aceitos: `desvio`, `adequado`, `pendente`, `subdimensionado`, `superdimensionado`,
 `sem_configuracao`, `dados_insuficientes`. `sort`: `ajuste`, `pressao`, `nome`.
@@ -104,10 +112,30 @@ de referência (request), percentil do pico de CPU e de memória (limit), margen
 de "adequado". Ao salvar, o back-end valida os valores, grava o arquivo `FORMULA_FILE`, descarta o resultado anterior
 e recalcula. Os textos de "Método" e "Justificativa" passam a usar a fórmula nova.
 
-- A alteração exige o token em `ADMIN_TOKEN`. A leitura é pública, como o restante da API.
+- A alteração exige usuário e senha de administrador (HTTP Basic). A leitura é pública, como o restante da API.
+- **Senha gerada no primeiro boot.** O back-end cria a senha (usuário `passuser`) e a guarda no Secret
+  `resource-advisor-admin`. Nos boots seguintes, o Secret existente é reutilizado. Para ler a senha:
+  `kubectl -n resource-advisor get secret resource-advisor-admin -o jsonpath='{.data.password}' | base64 -d`.
+  Para trocar, apague o Secret e reinicie o back-end. A senha nunca vai para o log.
+- A senha viaja em HTTP Basic. Exponha a interface só por HTTPS (ingress com TLS) ou port-forward local.
 - Não há edição de expressão livre: só os parâmetros acima. Um avaliador de expressões seria um próximo passo.
 - No Kubernetes, crie o Secret `resource-advisor-admin` (veja `k8s/backend-secret.example.yaml`). O volume
   `resource-advisor-formula` (`k8s/formula-pvc.yaml`) guarda `formula.json` e sobrevive a reinícios.
+
+## Aplicar no cluster
+
+Com `ALLOW_CLUSTER_CHANGES=true`, o bloco "Trecho YAML para revisão" de cada container tem dois botões, separados de propósito:
+
+- **Aplicar no Deployment (ou StatefulSet/DaemonSet):** faz patch no template com os `requests` e `limits` sugeridos.
+  É persistente e reinicia as réplicas (rolling update). É a opção que vale para o próximo deploy.
+- **Aplicar resize nos pods:** faz `kubectl patch --subresource=resize` em cada réplica ativa do container.
+  Não altera o template, então some quando o pod é recriado. Exige in-place pod resize no cluster.
+
+O plano sai sempre da análise atual, não do navegador: a requisição só informa o container e o alvo. Antes de confirmar,
+o diálogo mostra o valor atual e o novo, e pede usuário e senha de administrador. Reduzir o limit de memória abaixo do uso
+atual pode causar OOMKill: confira o histórico antes de aplicar.
+
+Com a flag em `false` (padrão), os botões não aparecem e a API responde 403 para a escrita.
 
 ## Validação local
 
@@ -143,6 +171,8 @@ cd backend && python3 -m unittest discover -s tests -t .
 - **Não validado contra um cluster ou Prometheus reais.** Os testes usam um Prometheus simulado, que responde às mesmas
   consultas. A validação T01 e T07 (comparar com consultas diretas em dois namespaces) ainda precisa ser feita no ambiente.
 - **Interface testada só em Chromium headless.** As telas e o fluxo da fórmula foram executados, mas não em outros navegadores.
+- **Escrita no cluster desligada por padrão.** Ligue só com `ALLOW_CLUSTER_CHANGES=true` e o RBAC de `k8s/rbac.yaml`.
+  O ClusterRole cobre todos os namespaces; para restringir, use RoleBindings por namespace.
 - **Autorização por namespace não implementada.** O enunciado a condiciona a restrições de acesso entre equipes; hoje a API
   expõe todos os namespaces que não estão em `EXCLUDED_NAMESPACES`.
 - **Percentis sobre o passo da consulta.** As séries de CPU têm a resolução do passo (15 ou 30 min). Picos curtos de CPU podem

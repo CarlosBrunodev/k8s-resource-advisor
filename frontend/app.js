@@ -4,6 +4,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 const app = $("#app");
 const enc = (v) => encodeURIComponent(v);
+const basicAuth = (user, password) => `Basic ${btoa(`${user}:${password}`)}`;
 const dec = (v) => decodeURIComponent(v);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => (
   { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
@@ -30,6 +31,12 @@ const badge = (status) => {
   const s = STATUS[status] || { label: status, icon: "?", cls: "neutral" };
   return `<span class="badge ${s.cls}"><span aria-hidden="true">${s.icon}</span>${esc(s.label)}</span>`;
 };
+const REASON_NOTE = {
+  throttling: "por throttling de CPU: o consumo médio está abaixo do limit, mas as rajadas são limitadas",
+  oom: "por OOMKilled: a memória ultrapassou o limit",
+};
+const reasonNote = (it) => (REASON_NOTE[it.statusReason]
+  ? `<div class="muted small reason-note">${esc(REASON_NOTE[it.statusReason])}</div>` : "");
 const fmtCpu = (v) => (v == null ? "—" : `${Math.round(v)}m`);
 const fmtMem = (v) => {
   if (v == null) return "—";
@@ -95,8 +102,15 @@ function overviewRow(n, maxWorkloads) {
 }
 
 async function renderOverview() {
-  const data = await api("api/overview");
+  // nodes é independente dos workloads: se a consulta falhar, a visão geral continua e o tile mostra "indisponível"
+  const [data, nodesData] = await Promise.all([api("api/overview"), api("api/nodes").catch(() => null)]);
   setCrumbs("");
+  const workersTile = nodesData
+    ? `<a class="stat stat-link" href="#/nodes"><span class="stat-label">Workers (nodes)</span>
+         <span class="stat-value">${nodesData.summary.workers}</span>
+         <span class="muted small">${nodesData.summary.ready} prontos · ver nodes ›</span></a>`
+    : `<div class="stat"><span class="stat-label">Workers (nodes)</span><span class="stat-value">—</span>
+         <span class="muted small">indisponível</span></div>`;
   const q = data.quality;
   const retention = q.retentionSeconds == null
     ? "não identificada"
@@ -112,6 +126,7 @@ async function renderOverview() {
       <div class="stat"><span class="stat-label">Namespaces</span><span class="stat-value">${namespaces.length}</span></div>
       <div class="stat"><span class="stat-label">Workloads analisados</span><span class="stat-value">${totalWorkloads}</span></div>
       <div class="stat"><span class="stat-label">Janela de análise</span><span class="stat-value">${data.window.days} dias</span></div>
+      ${workersTile}
     </section>
     <div class="table-wrap">
       <table class="grid">
@@ -131,6 +146,147 @@ async function renderOverview() {
         <li>Containers com throttling de CPU: ${q.throttledContainers}. Com OOMKilled: ${q.oomContainers}.</li>
       </ul>
     </details>`;
+}
+
+/* ---------- nodes (workers) ---------- */
+const NODE_STATUS = {
+  ok: { label: "OK", icon: "✓", cls: "ok" },
+  atencao: { label: "Atenção", icon: "!", cls: "attention" },
+  sobrecarregado: { label: "Sobrecarregado", icon: "▲", cls: "bad" },
+};
+const nodeBadge = (status) => {
+  const s = NODE_STATUS[status] || { label: status, icon: "?", cls: "neutral" };
+  return `<span class="badge ${s.cls}"><span aria-hidden="true">${s.icon}</span>${esc(s.label)}</span>`;
+};
+const fmtPctBr = (v) => (v == null ? "—" : `${v.toFixed(1).replace(".", ",")}%`);
+const ROLE_LABEL = { worker: "worker", "control-plane": "control plane" };
+
+/* barra de percentual do alocável; acima de 100% a barra fica vermelha e limitada à largura */
+function pctCell(v) {
+  if (v == null) return '<span class="muted">—</span>';
+  const over = v > 100;
+  const w = Math.min(v, 100).toFixed(1);
+  return `<div class="bar-track"><span class="bar${over ? " over" : ""}" data-w="${w}"></span></div>
+    <span class="small">${fmtPctBr(v)}</span>`;
+}
+
+function nodeRow(n) {
+  const notes = n.flags.length ? esc(n.flags.join("; ")) : "—";
+  return `
+    <tr>
+      <td><a href="#/nodes/${enc(n.name)}">${esc(n.name)}</a>
+          <div class="muted small">${esc(ROLE_LABEL[n.role] || n.role)}${n.unschedulable ? " · cordon" : ""}</div></td>
+      <td>${nodeBadge(n.status)}</td>
+      <td class="num">${n.pods}</td>
+      <td class="bar-cell">${pctCell(n.cpu.requestsPct)}</td>
+      <td class="bar-cell">${pctCell(n.cpu.limitsPct)}</td>
+      <td class="bar-cell">${pctCell(n.memory.requestsPct)}</td>
+      <td class="bar-cell">${pctCell(n.memory.limitsPct)}</td>
+      <td class="small">${notes}</td>
+    </tr>`;
+}
+
+function clusterCard(label, r, fmt) {
+  return `<div class="card static">
+    <h3>${label}</h3>
+    <p>Alocável <strong>${fmt(r.allocatable)}</strong></p>
+    <p>Requests <strong>${fmt(r.requests)}</strong> (${fmtPctBr(r.requestsPct)})</p>
+    <p>Limits <strong>${fmt(r.limits)}</strong> (${fmtPctBr(r.limitsPct)})</p>
+    <p>Livre para agendar <strong>${fmt(r.free)}</strong></p>
+  </div>`;
+}
+
+async function renderNodes() {
+  const data = await api("api/nodes");
+  setCrumbs(`<a href="#/">Visão geral</a> / <strong>Nodes</strong>`);
+  const s = data.summary;
+  const balance = s.balanced == null ? "—" : s.balanced ? "Equilibrado" : "Desbalanceado";
+  const spread = s.spreadPct == null ? "" : ` (diferença de ${fmtPctBr(s.spreadPct)} entre o mais e o menos carregado)`;
+  const stale = data.meta && data.meta.stale ? `<p class="warn">Dados desatualizados: ${esc(data.meta.error)}</p>` : "";
+  const rows = data.nodes.map(nodeRow).join("");
+  return `
+    <header class="page-head">
+      <div>
+        <h1>Nodes</h1>
+        <p class="muted small">Requests e limits somados por node, a partir dos pods em execução agora.</p>
+      </div>
+    </header>
+    ${stale}
+    <section class="summary">
+      <div class="stat"><span class="stat-label">Workers</span><span class="stat-value">${s.workers}</span>
+        <span class="muted small">${s.ready} prontos${s.controlPlane ? ` · ${s.controlPlane} control plane` : ""}</span></div>
+      <div class="stat"><span class="stat-label">CPU · requests</span><span class="stat-value">${fmtPctBr(s.cpu.requestsPct)}</span>
+        <span class="muted small">limits ${fmtPctBr(s.cpu.limitsPct)}</span></div>
+      <div class="stat"><span class="stat-label">Memória · requests</span><span class="stat-value">${fmtPctBr(s.memory.requestsPct)}</span>
+        <span class="muted small">limits ${fmtPctBr(s.memory.limitsPct)}</span></div>
+      <div class="stat"><span class="stat-label">Distribuição entre workers</span><span class="stat-value">${balance}</span>
+        <span class="muted small">${esc(spread.trim())}</span></div>
+    </section>
+    <section class="cards">
+      ${clusterCard("CPU (workers)", s.cpu, fmtCpu)}
+      ${clusterCard("Memória (workers)", s.memory, fmtMem)}
+    </section>
+    <p class="muted small capacity-note">Requests acima de 100% do alocável não deveriam existir: o scheduler não agenda
+      pod além da capacidade. Limits acima de 100% são overcommit: se todos os pods usarem até o limit ao mesmo tempo,
+      o node não comporta. Desbalanceado = diferença acima de ${s.thresholds.spreadPp} pontos entre workers.</p>
+    <div class="table-wrap">
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>Node</th><th>Status</th><th class="num">Pods</th>
+            <th>CPU requests</th><th>CPU limits</th><th>Memória requests</th><th>Memória limits</th><th>Observações</th>
+          </tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="8">Nenhum node encontrado.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
+async function renderNodeDetail(name) {
+  const data = await api(`api/nodes/${enc(name)}`);
+  setCrumbs(`<a href="#/">Visão geral</a> / <a href="#/nodes">Nodes</a> / <strong>${esc(name)}</strong>`);
+  const n = data.node;
+  const stale = data.meta && data.meta.stale ? `<p class="warn">Dados desatualizados: ${esc(data.meta.error)}</p>` : "";
+  const notes = n.flags.length
+    ? `<ul class="quality">${n.flags.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>`
+    : '<p class="muted small">Nenhuma observação.</p>';
+  const rows = data.containers.map((c) => `
+    <tr>
+      <td>${esc(c.namespace)}</td>
+      <td>${esc(c.pod)}</td>
+      <td>${esc(c.container)}</td>
+      <td class="num">${fmtCpu(c.cpuRequest)}</td>
+      <td class="num">${c.cpuLimit == null ? '<span class="warn">sem limit</span>' : fmtCpu(c.cpuLimit)}</td>
+      <td class="num">${fmtMem(c.memoryRequest)}</td>
+      <td class="num">${c.memoryLimit == null ? '<span class="warn">sem limit</span>' : fmtMem(c.memoryLimit)}</td>
+    </tr>`).join("");
+  return `
+    <header class="page-head">
+      <div>
+        <h1>Node ${esc(name)}</h1>
+        <p class="muted small">${esc(ROLE_LABEL[n.role] || n.role)} · ${data.pods} pod(s) · ${n.ready === false ? "não está Ready" : n.ready ? "Ready" : "estado desconhecido"}${n.unschedulable ? " · cordon" : ""}</p>
+      </div>
+      ${nodeBadge(n.status)}
+    </header>
+    ${stale}
+    <section class="cards">
+      ${clusterCard("CPU", data.cpu, fmtCpu)}
+      ${clusterCard("Memória", data.memory, fmtMem)}
+    </section>
+    <h3>Observações</h3>
+    ${notes}
+    <div class="table-wrap">
+      <table class="grid">
+        <thead>
+          <tr>
+            <th>Namespace</th><th>Pod</th><th>Container</th>
+            <th class="num">CPU request</th><th class="num">CPU limit</th>
+            <th class="num">Memória request</th><th class="num">Memória limit</th>
+          </tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="7">Nenhum container agendado neste node.</td></tr>'}</tbody>
+      </table>
+    </div>`;
 }
 
 /* ---------- namespace ---------- */
@@ -331,7 +487,7 @@ function itemRow(c, it, id) {
       <td class="num">${fmtVal(it.reference, it.unit)}</td>
       <td class="num">${fmtVal(it.suggested, it.unit)}</td>
       <td class="num">${fmtAdj(it.adjustment, it.unit)}</td>
-      <td>${badge(it.status)}</td>
+      <td>${badge(it.status)}${reasonNote(it)}</td>
     </tr>
     <tr hidden>
       <td colspan="7">
@@ -373,6 +529,19 @@ function podsTable(pods) {
     </div>`;
 }
 
+let detailCtx = null; // {ns, kind, name, workload, writes}: workload em exibição
+
+function applyButtons(ci) {
+  if (!detailCtx || !detailCtx.writes) return "";
+  return `
+      <div class="apply-actions">
+        <button class="button" type="button" data-apply="workload" data-ci="${ci}">Aplicar no ${esc(detailCtx.kind)}</button>
+        <button class="button secondary" type="button" data-apply="pods" data-ci="${ci}">Aplicar resize nos pods</button>
+      </div>
+      <p class="muted small">Aplicar no ${esc(detailCtx.kind)} altera o template e reinicia as réplicas (persistente). O resize atua
+        só nos pods atuais e some quando eles são recriados.</p>`;
+}
+
 function containerSection(c, ci, charts) {
   const chart = charts.find((x) => x.container === c.name) || { cpu: { consumption: [] }, memory: { consumption: [] } };
   const rows = c.items.map((it, idx) => itemRow(c, it, `row-${ci}-${idx}`)).join("");
@@ -410,12 +579,14 @@ function containerSection(c, ci, charts) {
         <pre class="yaml" id="yaml-${ci}">${esc(c.yaml)}</pre>
         <button class="button secondary" type="button" data-copy="yaml-${ci}">Copiar YAML</button>
       </div>
+      ${applyButtons(ci)}
     </section>`;
 }
 
 async function renderDetail(ns, kind, name, qs) {
   const data = await api(`api/namespaces/${enc(ns)}/workloads/${enc(kind)}/${enc(name)}`);
   const w = data.workload;
+  detailCtx = { ns, kind, name, workload: w, writes: !!data.writes, adminUser: data.adminUser };
   const back = `#/ns/${enc(ns)}${qs ? `?${qs}` : ""}`;
   setCrumbs(`<a href="#/">Visão geral</a> / <a href="${back}">${esc(ns)}</a> / <strong>${esc(name)}</strong>`);
   return `
@@ -494,7 +665,7 @@ async function renderAdmin() {
   const { values, texts } = data.formula;
   const editable = data.editable;
   const notes = [];
-  if (!editable) notes.push("Edição desabilitada: o back-end não tem ADMIN_TOKEN configurado.");
+  if (!editable) notes.push("Edição desabilitada: credenciais de administrador indisponíveis. Veja os logs do back-end.");
   if (!data.persisted) notes.push("A fórmula não está gravada em arquivo (FORMULA_FILE): a edição vale só até o back-end reiniciar.");
   return `
     <h1>Fórmula de recomendação</h1>
@@ -511,10 +682,13 @@ async function renderAdmin() {
       <form id="formula-form" novalidate>
         <div class="form-grid">
           ${FORMULA_FIELDS.map((f) => formField(f, values[f.name], editable)).join("")}
-          <label>Token de administrador
-            <input name="token" type="password" autocomplete="off"${editable ? "" : " disabled"}>
-            <span class="hint">Valor de ADMIN_TOKEN no back-end. O navegador não guarda este token.</span>
-            <span class="field-error" data-error="token" hidden></span>
+          <label>Usuário de administrador
+            <input name="user" type="text" autocomplete="username" value="${esc(data.adminUser)}"${editable ? "" : " disabled"}>
+            <span class="hint">Criado no primeiro boot do back-end.</span>
+          </label>
+          <label>Senha de administrador
+            <input name="password" type="password" autocomplete="current-password"${editable ? "" : " disabled"}>
+            <span class="hint">Gerada no primeiro boot e guardada no Secret resource-advisor-admin. O navegador não guarda a senha.</span>
           </label>
         </div>
         <div class="preview" id="formula-preview" aria-live="polite"></div>
@@ -576,7 +750,7 @@ async function saveFormula(form) {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
-        "X-Admin-Token": form.elements.token.value,
+        Authorization: basicAuth(form.elements.user.value, form.elements.password.value),
       },
       body: JSON.stringify(formValues(form)),
     });
@@ -587,7 +761,7 @@ async function saveFormula(form) {
       $("#formula-current").innerHTML = formulaList(values, texts);
       // o valor salvo passa a ser o padrão do formulário: "Desfazer" volta para ele
       FORMULA_FIELDS.forEach((f) => { form.elements[f.name].defaultValue = String(values[f.name]); });
-      form.elements.token.value = "";
+      form.elements.password.value = "";
       status.textContent = `Fórmula salva. Resultados recalculados às ${new Date(body.generatedAt).toLocaleTimeString("pt-BR")}.`;
       return;
     }
@@ -615,6 +789,103 @@ function setTabs(path) {
   });
 }
 
+/* ---------- aplicar no cluster ---------- */
+function createApplyDialog() {
+  const dlg = document.createElement("dialog");
+  dlg.id = "apply-dialog";
+  dlg.className = "apply-dialog";
+  dlg.addEventListener("click", (ev) => { if (ev.target === dlg) dlg.close(); }); // clique no fundo fecha
+  document.body.appendChild(dlg);
+  return dlg;
+}
+
+function openApplyDialog(target, ci) {
+  const c = detailCtx.workload.containers[ci];
+  const rows = c.items.filter((i) => i.suggested != null).map((i) => `
+    <tr><td>${esc(i.label)}</td><td class="num">${fmtVal(i.current, i.unit)}</td>
+      <td class="num"><strong>${fmtVal(i.suggested, i.unit)}</strong></td></tr>`).join("");
+  const active = c.pods.filter((p) => p.active).length;
+  const where = target === "workload"
+    ? `${esc(detailCtx.kind)} <strong>${esc(detailCtx.name)}</strong>, persistente, com rolling update`
+    : `${active} pod(s) ativo(s), resize in-place (não persiste se o pod for recriado)`;
+  const dlg = document.getElementById("apply-dialog") || createApplyDialog();
+  dlg.innerHTML = `
+    <form id="apply-form" class="apply-form" novalidate>
+      <h2>${target === "workload" ? "Aplicar no workload" : "Aplicar resize nos pods"}</h2>
+      <p>Container <code>${esc(c.name)}</code>, ${where}.</p>
+      <div class="table-wrap">
+        <table class="grid compact">
+          <thead><tr><th>Recurso</th><th class="num">Atual</th><th class="num">Novo</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="3">Sem sugestão para aplicar.</td></tr>'}</tbody>
+        </table>
+      </div>
+      <p class="warn">Reduzir o limit de memória abaixo do uso atual pode causar OOMKill. Confira antes de confirmar.</p>
+      <label>Usuário de administrador
+        <input name="user" type="text" autocomplete="username" value="${esc(detailCtx.adminUser)}">
+      </label>
+      <label>Senha de administrador
+        <input name="password" type="password" autocomplete="current-password">
+      </label>
+      <p class="form-status" id="apply-status" role="status"></p>
+      <div class="form-actions">
+        <button class="button" type="button" data-apply-confirm${rows ? "" : " disabled"}>Aplicar</button>
+        <button class="button secondary" type="button" data-apply-cancel>Cancelar</button>
+      </div>
+    </form>`;
+  dlg.querySelector("[data-apply-cancel]").addEventListener("click", () => dlg.close());
+  dlg.querySelector("[data-apply-confirm]").addEventListener("click", () => confirmApply(dlg, target, ci));
+  if (dlg.open) dlg.close();
+  dlg.showModal();
+  dlg.querySelector("input[name=password]").focus();
+}
+
+async function confirmApply(dlg, target, ci) {
+  const form = dlg.querySelector("#apply-form");
+  const status = dlg.querySelector("#apply-status");
+  const button = dlg.querySelector("[data-apply-confirm]");
+  const { ns, kind, name, workload } = detailCtx;
+  if (!form.elements.password.value) {
+    status.textContent = "Informe a senha de administrador.";
+    status.classList.add("error");
+    return;
+  }
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Aplicando…";
+  try {
+    const res = await fetch(`api/namespaces/${enc(ns)}/workloads/${enc(kind)}/${enc(name)}/apply`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: basicAuth(form.elements.user.value, form.elements.password.value),
+      },
+      body: JSON.stringify({ container: workload.containers[ci].name, target }),
+    });
+    const body = await res.json().catch(() => ({}));
+    form.elements.password.value = "";
+    if (!res.ok) {
+      status.textContent = body.error || `Erro HTTP ${res.status}`;
+      status.classList.add("error");
+      return;
+    }
+    const failed = body.results.filter((r) => r.status !== "ok");
+    if (target === "workload") {
+      status.textContent = `${kind} ${name} atualizado. As réplicas estão sendo reiniciadas.`;
+    } else {
+      status.textContent = `Resize aplicado em ${body.results.length - failed.length} de ${body.results.length} pod(s).`
+        + failed.map((r) => ` ${r.pod}: ${r.detail}`).join("");
+      if (failed.length) status.classList.add("error");
+    }
+    status.textContent += " Os números desta tela mudam na próxima coleta.";
+  } catch (err) {
+    status.textContent = `Não foi possível aplicar: ${err.message}`;
+    status.classList.add("error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
 /* ---------- roteamento ---------- */
 function parseHash() {
   const raw = location.hash.replace(/^#/, "") || "/";
@@ -625,7 +896,10 @@ function parseHash() {
 async function route() {
   const { path, qs } = parseHash();
   if (path === "/admin") return renderAdmin();
-  let m = path.match(/^\/ns\/([^/]+)\/w\/([^/]+)\/([^/]+)$/);
+  if (path === "/nodes") return renderNodes();
+  let m = path.match(/^\/nodes\/([^/]+)$/);
+  if (m) return renderNodeDetail(dec(m[1]));
+  m = path.match(/^\/ns\/([^/]+)\/w\/([^/]+)\/([^/]+)$/);
   if (m) return renderDetail(dec(m[1]), dec(m[2]), dec(m[3]), qs);
   m = path.match(/^\/ns\/([^/]+)$/);
   if (m) return renderNamespace(dec(m[1]), qs);
@@ -690,6 +964,8 @@ let searchTimer = null;
 app.addEventListener("click", (ev) => {
   const copy = ev.target.closest("[data-copy]");
   if (copy) return copyText(copy);
+  const apply = ev.target.closest("[data-apply]");
+  if (apply) return openApplyDialog(apply.dataset.apply, Number(apply.dataset.ci));
   const row = ev.target.closest("tr[data-row]");
   if (row && !ev.target.closest("a")) toggleRow(row);
 });

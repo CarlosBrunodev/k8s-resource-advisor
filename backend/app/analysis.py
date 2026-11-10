@@ -189,15 +189,18 @@ def _justification(res, kind, current, ref, sugg, ctx):
     if current is None:
         return f"Sem {kind} de {noun} configurado. Sugestão a partir do consumo observado: {_fmt(sugg, unit)}."
     tol = f"{s.tolerance * 100:g}%"
+    floor_note = ""
+    if ctx.get("floor_applied"):
+        floor_note = f" Mínimo de boa prática de CPU aplicado: {_fmt(ctx['floor'], unit)}."
     if kind == "request":
         return (f"Referência {_fmt(ref, unit)} ({_pct_label(s.reference_percentile)}) × "
                 f"(1 + {s.request_margin * 100:g}%) = {_fmt(sugg, unit)}. "
-                f"Atual {_fmt(current, unit)}; tolerância ±{tol}.")
+                f"Atual {_fmt(current, unit)}; tolerância ±{tol}.{floor_note}")
     text = (f"Pico {_fmt(ref, unit)} ({_pct_label(s.cpu_limit_percentile if res == 'cpu' else s.memory_limit_percentile)})"
             f" × (1 + {s.limit_margin * 100:g}%) = {_fmt(sugg, unit)}. Atual {_fmt(current, unit)}; tolerância ±{tol}.")
     if ctx["raised_to_request"]:
         text += " Limite elevado para não ficar abaixo do request sugerido."
-    return text
+    return text + floor_note
 
 
 # --------------------------------------------------------------------------- por container e workload
@@ -219,6 +222,7 @@ def _container(name, pods, col, s, header):
     thr = _max(stats, "throttlePct") or 0.0
     oom = sum(p["oomEvents"] for p in stats)
 
+    throttled_cpu = cpu_ok and thr >= s.throttling_threshold
     refs = {
         ("cpu", "request"): _max(stats, "cpuRef"),
         ("cpu", "limit"): _max(stats, "cpuPeak"),
@@ -231,8 +235,13 @@ def _container(name, pods, col, s, header):
     suggested = {}
     if cpu_ok:
         suggested[("cpu", "request")] = max(s.cpu_floor_m, _ceil(refs[("cpu", "request")] * (1 + m)))
-        suggested[("cpu", "limit")] = max(suggested[("cpu", "request")],
-                                          _ceil(refs[("cpu", "limit")] * (1 + lm)))
+        cpu_limit = max(s.cpu_limit_floor_m, suggested[("cpu", "request")], _ceil(refs[("cpu", "limit")] * (1 + lm)))
+        current_cpu_limit = config.get(("cpu", "limit"))
+        if throttled_cpu and current_cpu_limit is not None:
+            # com throttling, sobe a partir do limit atual em passos da margem. Não segue picos isolados:
+            # enquanto o throttling persistir, a sugestão sobe a cada análise; sem throttling, volta ao P99.
+            cpu_limit = max(cpu_limit, _ceil(current_cpu_limit * (1 + lm)))
+        suggested[("cpu", "limit")] = cpu_limit
     if mem_ok:
         suggested[("memory", "request")] = max(s.memory_floor_mi, _ceil(refs[("memory", "request")] * (1 + m)))
         suggested[("memory", "limit")] = max(suggested[("memory", "request")],
@@ -246,7 +255,7 @@ def _container(name, pods, col, s, header):
         sugg = suggested.get(key) if data_ok else None
         ref = refs[key] if data_ok else None
         ctx = {"settings": s, "coverage": coverage, "history_hours": history_hours,
-               "override": None, "status": None, "raised_to_request": False}
+               "override": None, "status": None, "raised_to_request": False, "reason": None}
 
         if not data_ok:
             status = "sem_configuracao" if current is None else "dados_insuficientes"
@@ -254,15 +263,30 @@ def _container(name, pods, col, s, header):
             status = "sem_configuracao" if current is None else _status(current, sugg, s.tolerance)
             if kind == "limit" and current is not None and res == "cpu" and thr >= s.throttling_threshold:
                 status = "subdimensionado"
-                ctx["override"] = (f"Throttling de CPU em {thr:.1f}% dos períodos (alerta a partir de "
-                                   f"{s.throttling_threshold:g}%). Avalie o limit antes de reduzi-lo; "
-                                   f"sugestão com pico × (1 + {lm * 100:g}%).")
+                ctx["reason"] = "throttling"
+                ctx["override"] = (
+                    f"Status definido por throttling: {thr:.1f}% dos períodos de CPU foram limitados "
+                    f"(alerta a partir de {s.throttling_threshold:g}%), mesmo com o consumo médio abaixo do limit. "
+                    f"Sugestão: maior valor entre pico {_fmt(refs[key], UNITS[res])} × (1 + {lm * 100:g}%) "
+                    f"e limit atual {_fmt(current, UNITS[res])} × (1 + {lm * 100:g}%) = {_fmt(sugg, UNITS[res])}. "
+                    f"Enquanto houver throttling, a sugestão sobe em passos de {lm * 100:g}%. Não reduza o limit."
+                )
             if kind == "limit" and current is not None and res == "memory" and oom > 0:
                 status = "subdimensionado"
+                ctx["reason"] = "oom"
                 ctx["override"] = (f"OOMKilled observado em {oom} intervalo(s) da janela. Investigar antes "
                                    f"de reduzir; sugestão com pico × (1 + {lm * 100:g}%).")
             if kind == "limit" and sugg is not None:
-                ctx["raised_to_request"] = refs[key] * (1 + lm) < sugg
+                lower = refs[key] * (1 + lm)
+                if res == "cpu":
+                    lower = max(lower, s.cpu_limit_floor_m)  # o piso também é um mínimo, não só o request
+                ctx["raised_to_request"] = lower < sugg
+        # piso de boa prática de CPU: vale quando o cálculo daria menos que o piso
+        if res == "cpu" and sugg is not None:
+            floor = s.cpu_floor_m if kind == "request" else s.cpu_limit_floor_m
+            margin = m if kind == "request" else lm
+            ctx["floor_applied"] = sugg == floor and refs[key] * (1 + margin) < floor
+            ctx["floor"] = floor
         ctx["status"] = status
 
         adjustment = _round(sugg - current) if sugg is not None and current is not None else None
@@ -278,6 +302,7 @@ def _container(name, pods, col, s, header):
             "adjustment": adjustment,
             "status": status,
             "statusLabel": STATUS_LABELS[status],
+            "statusReason": ctx["reason"],
             "method": method_text(res, kind, s, s.window_days),
             "justification": _justification(res, kind, current, ref, sugg, ctx),
         })

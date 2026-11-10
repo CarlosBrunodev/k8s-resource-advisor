@@ -1,0 +1,61 @@
+# Permissões do back-end.
+# - Secret do administrador: ler e criar (só no próprio namespace). Usado no primeiro boot e para validar a senha.
+# - Aplicação de ajustes: usada só quando ALLOW_CLUSTER_CHANGES=true.
+#
+# Este ClusterRole vale para todos os namespaces. Para limitar, troque o ClusterRoleBinding por um
+# RoleBinding em cada namespace que o app deve poder ajustar.
+#
+# O subresource pods/resize exige Kubernetes com in-place pod resize (GA na 1.33; antes, feature gate).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: resource-advisor-backend
+  labels:
+    app.kubernetes.io/name: resource-advisor
+    app.kubernetes.io/component: backend
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: resource-advisor-admin-secret
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: resource-advisor-admin-secret
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: resource-advisor-admin-secret
+subjects:
+  - kind: ServiceAccount
+    name: resource-advisor-backend
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: resource-advisor-apply
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["pods/resize"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: resource-advisor-apply
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: resource-advisor-apply
+subjects:
+  - kind: ServiceAccount
+    name: resource-advisor-backend
+    namespace: resource-advisor

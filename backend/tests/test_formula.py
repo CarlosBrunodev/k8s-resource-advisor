@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import tempfile
@@ -15,16 +16,16 @@ from app.service import AnalysisService
 from tests.fakes import FakeProm, make_settings
 
 NOW = 1_700_000_000.0
-TOKEN = "segredo-de-teste"
+USER, PASSWORD = "passuser", "senha-de-teste"
 
 
-def _request(base, path, method="GET", body=None, token=None):
+def _request(base, path, method="GET", body=None, password=None):
     data = None if body is None else json.dumps(body).encode("utf-8")
     req = urllib.request.Request(base + path, data=data, method=method)
     if data is not None:
         req.add_header("Content-Type", "application/json")
-    if token is not None:
-        req.add_header("X-Admin-Token", token)
+    if password is not None:
+        req.add_header("Authorization", "Basic " + base64.b64encode(f"{USER}:{password}".encode()).decode())
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.status, json.loads(resp.read())
@@ -88,7 +89,7 @@ class FormulaApiTests(unittest.TestCase):
                          req_cpu=0.1, req_mem=256 * MIB, lim_cpu=0.5, lim_mem=512 * MIB)
         cls.tmp = tempfile.TemporaryDirectory()
         cls.path = os.path.join(cls.tmp.name, "formula.json")
-        settings = replace(make_settings(), admin_token=TOKEN, formula_file=cls.path)
+        settings = replace(make_settings(), admin_password=PASSWORD, formula_file=cls.path)
         cls.service = AnalysisService(settings, client=cls.fake, clock=lambda: NOW)
         cls.server = make_server(cls.service, "127.0.0.1", 0)
         cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
@@ -108,35 +109,35 @@ class FormulaApiTests(unittest.TestCase):
         self.assertEqual(body["formula"]["texts"]["request"], "7 d · P95 · margem 20%")
         self.assertEqual(body["formula"]["texts"]["memoryLimit"], "7 d · máximo · margem 20%")
 
-    def test_put_requires_valid_token(self):
+    def test_put_requires_valid_password(self):
         status, body = _request(self.base, "/api/formula", "PUT", {"reference_percentile": 90})
         self.assertEqual(status, 401)
-        status, body = _request(self.base, "/api/formula", "PUT", {"reference_percentile": 90}, token="errado")
+        status, body = _request(self.base, "/api/formula", "PUT", {"reference_percentile": 90}, password="errada")
         self.assertEqual(status, 401)
         self.assertEqual(self.service.settings.reference_percentile, 95.0)
 
-    def test_put_disabled_without_admin_token(self):
+    def test_put_disabled_without_admin_password(self):
         other = AnalysisService(make_settings(), client=self.fake, clock=lambda: NOW)
         server = make_server(other, "127.0.0.1", 0)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
             base = f"http://127.0.0.1:{server.server_address[1]}"
-            status, body = _request(base, "/api/formula", "PUT", {"reference_percentile": 90}, token="x")
+            status, body = _request(base, "/api/formula", "PUT", {"reference_percentile": 90}, password="x")
             self.assertEqual(status, 403)
-            self.assertIn("ADMIN_TOKEN", body["error"])
+            self.assertIn("credenciais", body["error"])
         finally:
             server.shutdown()
             server.server_close()
 
     def test_put_validation_error_returns_400_and_changes_nothing(self):
-        status, body = _request(self.base, "/api/formula", "PUT", {"window_days": 99}, token=TOKEN)
+        status, body = _request(self.base, "/api/formula", "PUT", {"window_days": 99}, password=PASSWORD)
         self.assertEqual(status, 400)
         self.assertIn("window_days", body["fields"])
         self.assertEqual(self.service.settings.window_days, 7)
 
     def test_put_applies_recalculates_and_persists(self):
         status, body = _request(self.base, "/api/formula", "PUT",
-                                {"reference_percentile": 90, "request_margin_percent": 30}, token=TOKEN)
+                                {"reference_percentile": 90, "request_margin_percent": 30}, password=PASSWORD)
         self.assertEqual(status, 200)
         self.assertEqual(body["formula"]["texts"]["request"], "7 d · P90 · margem 30%")
         self.assertEqual(self.service.settings.reference_percentile, 90.0)
@@ -155,7 +156,7 @@ class FormulaApiTests(unittest.TestCase):
 
         # restaura a fórmula padrão para não afetar os outros testes deste módulo
         _request(self.base, "/api/formula", "PUT",
-                 {"reference_percentile": 95, "request_margin_percent": 20}, token=TOKEN)
+                 {"reference_percentile": 95, "request_margin_percent": 20}, password=PASSWORD)
 
 
 if __name__ == "__main__":

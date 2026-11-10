@@ -7,7 +7,8 @@ Requisitos: Docker com `docker compose` v2, `make` e `curl`.
 make up              # constrói as imagens, sobe tudo e aguarda ficar pronto
 make check           # roda 31 verificações contra os cenários conhecidos
 make up WINDOW=14    # recria com janela de 14 dias
-ADMIN_TOKEN=segredo make up   # habilita a edição da fórmula na aba Fórmula (sem o token, ela fica desabilitada)
+make up              # na primeira vez, gera a senha de administrador do usuário passuser
+docker compose -p resource-advisor-local exec backend cat /data/admin.json   # mostra usuário e senha
 make logs            # acompanha os logs
 make down            # para tudo
 ```

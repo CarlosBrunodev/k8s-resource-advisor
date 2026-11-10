@@ -82,6 +82,14 @@ def _build_pods():
 PODS = _build_pods()
 STEP_DEFAULT = 900
 
+# nodes do cluster simulado: worker-3 é menor, então concentra a pressão de requests
+NODES = [
+    dict(name="cp-1", role="control-plane", cpu=2.0, mem=4096 * MIB),
+    dict(name="worker-1", role="worker", cpu=4.0, mem=8192 * MIB),
+    dict(name="worker-2", role="worker", cpu=4.0, mem=8192 * MIB),
+    dict(name="worker-3", role="worker", cpu=2.0, mem=4096 * MIB),
+]
+
 
 def _grid(start, end, step):
     t = math.floor(start / step) * step
@@ -193,12 +201,48 @@ def _range(query, start, end, step, now):
     return result
 
 
+def _node_of(pod):
+    """Distribui os pods entre os workers de forma determinística (worker-3 tem menos capacidade)."""
+    workers = [n["name"] for n in NODES if n["role"] == "worker"]
+    return workers[zlib.crc32(pod.encode()) % len(workers)]
+
+
+def _node_instant(query, at):
+    def vec(metric, value):
+        return {"metric": metric, "value": [at, repr(float(value))]}
+
+    if "kube_node_info" in query:
+        return [vec({"node": n["name"]}, 1) for n in NODES]
+    if "kube_node_role" in query:
+        return [vec({"node": n["name"], "role": n["role"]}, 1) for n in NODES]
+    if "kube_node_status_allocatable" in query:
+        return [vec({"node": n["name"], "resource": res}, n[key])
+                for n in NODES for res, key in (("cpu", "cpu"), ("memory", "mem"))]
+    if "kube_node_status_condition" in query:
+        return [vec({"node": n["name"], "status": "true"}, 1) for n in NODES]
+    live = [(p, _node_of(p["pod"])) for p in PODS if _alive(p, at, at)]
+    if "kube_pod_info" in query:
+        return [vec({"namespace": p["ns"], "pod": p["pod"], "node": node}, 1) for p, node in live]
+    out = []
+    for p, node in live:
+        base = {"node": node, "namespace": p["ns"], "pod": p["pod"], "container": "app"}
+        for kind, metric in (("requests", "kube_pod_container_resource_requests"),
+                             ("limits", "kube_pod_container_resource_limits")):
+            if metric not in query:
+                continue
+            for res in ("cpu", "memory"):
+                value = _config_series(p, res, "request" if kind == "requests" else "limit", at, at)
+                if value is not None:
+                    out.append(vec({**base, "resource": res}, value))
+    return out
+
+
 def _instant(query, at):
-    if "kube_pod_container_status_restarts_total" not in query:
-        return []
-    return [{"metric": {"namespace": p["ns"], "pod": p["pod"], "container": "app"},
-             "value": [at, str(p["workload"]["restarts"])]}
-            for p in PODS if p["workload"].get("restarts")]
+    if "kube_pod_container_status_restarts_total" in query:
+        return [{"metric": {"namespace": p["ns"], "pod": p["pod"], "container": "app"},
+                 "value": [at, str(p["workload"]["restarts"])]}
+                for p in PODS if p["workload"].get("restarts")]
+    return _node_instant(query, at)
 
 
 class Handler(BaseHTTPRequestHandler):

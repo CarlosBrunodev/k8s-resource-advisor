@@ -1,5 +1,25 @@
-# Volume da fórmula editada pela página de administração (arquivo formula.json).
-# Ajuste storageClassName se o cluster não tiver uma classe padrão.
+# Volume da fórmula (formula.json e admin.json) para clusters SEM StorageClass.
+# Usa um PersistentVolume estático com hostPath. DirectoryOrCreate cria a pasta em qualquer nó onde o pod subir.
+# A pasta é criada como root: para o back-end (uid 10001) gravar, no nó onde ela existe rode:
+#   sudo chown 10001:10001 /srv/resource-advisor/formula
+# Se o pod mudar de nó, a fórmula gravada fica no nó anterior. Para persistência real, use um storage de rede.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: resource-advisor-formula
+  labels:
+    app.kubernetes.io/name: resource-advisor
+    app.kubernetes.io/component: backend
+spec:
+  capacity:
+    storage: 100Mi
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: /srv/resource-advisor/formula
+    type: DirectoryOrCreate
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -8,6 +28,8 @@ metadata:
     app.kubernetes.io/name: resource-advisor
     app.kubernetes.io/component: backend
 spec:
+  storageClassName: ""   # sem classe: liga ao PV estático acima, sem procurar StorageClass padrão
+  volumeName: resource-advisor-formula
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:

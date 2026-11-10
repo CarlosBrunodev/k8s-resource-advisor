@@ -24,10 +24,14 @@ data:
   PROMETHEUS_TIMEOUT_SECONDS: "20"
   PROMETHEUS_MAX_CONCURRENCY: "4"
   EXCLUDED_NAMESPACES: "kube-system,kube-public,kube-node-lease"
-  CPU_FLOOR_MILLICORES: "10"
+  CPU_FLOOR_MILLICORES: "100"        # piso do request de CPU sugerido (boa prática do time)
+  CPU_LIMIT_FLOOR_MILLICORES: "250"  # piso do limit de CPU sugerido (boa prática do time)
   MEMORY_FLOOR_MI: "32"
   PORT: "8080"
   FORMULA_FILE: "/data/formula.json"  # fórmula editada pelo admin; persiste no volume resource-advisor-formula
+  ALLOW_CLUSTER_CHANGES: "false"      # "true" habilita os botões que aplicam ajustes no cluster (ver k8s/rbac.yaml)
+  ADMIN_USER: "passuser"              # usuário da edição da fórmula; a senha é gerada no primeiro boot e fica no Secret ADMIN_SECRET
+  ADMIN_SECRET: "resource-advisor-admin"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -48,6 +52,7 @@ spec:
         app.kubernetes.io/name: resource-advisor
         app.kubernetes.io/component: backend
     spec:
+      serviceAccountName: resource-advisor-backend  # permissões de escrita, só usadas com ALLOW_CLUSTER_CHANGES=true
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -55,7 +60,7 @@ spec:
         fsGroup: 10001  # o volume da fórmula precisa ser gravável pelo usuário da imagem
       containers:
         - name: backend
-          image: carlosbrunodev/k8s-resource-advisor-api:1.0.0
+          image: carlosbrunodev/k8s-resource-advisor-api:2.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -82,13 +87,6 @@ spec:
                 secretKeyRef:
                   name: resource-advisor-prometheus
                   key: password
-                  optional: true
-            # Opcional: sem este token a edição da fórmula fica desabilitada.
-            - name: ADMIN_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: resource-advisor-admin
-                  key: token
                   optional: true
           startupProbe:
             httpGet:

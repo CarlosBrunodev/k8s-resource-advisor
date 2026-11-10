@@ -33,8 +33,13 @@ class Settings:
     excluded_namespaces: tuple
     cpu_floor_m: int
     memory_floor_mi: int
-    admin_token: str | None = None   # habilita a edição da fórmula (cabeçalho X-Admin-Token)
+    admin_user: str = "passuser"
+    admin_password: str | None = None  # gerada no boot (Secret ou ADMIN_FILE); sem ela, as escritas ficam desabilitadas
+    admin_secret: str = "resource-advisor-admin"
+    admin_file: str | None = None      # fora do cluster: onde a senha gerada é guardada (JSON)
     formula_file: str | None = None  # arquivo JSON com a fórmula editada; sem ele, a edição vale só até reiniciar
+    allow_cluster_changes: bool = False  # habilita os botões que aplicam ajustes no cluster (ALLOW_CLUSTER_CHANGES=true)
+    cpu_limit_floor_m: int = 250         # piso do limit de CPU sugerido (boa prática do time)
 
     @classmethod
     def from_env(cls):
@@ -66,8 +71,12 @@ class Settings:
             min_history_hours=float(_env("MIN_HISTORY_HOURS", "24")),
             cache_ttl=float(_env("CACHE_TTL_SECONDS", "300")),
             excluded_namespaces=tuple(n.strip() for n in excluded.split(",") if n.strip()),
-            cpu_floor_m=int(_env("CPU_FLOOR_MILLICORES", "10")),
+            cpu_floor_m=int(_env("CPU_FLOOR_MILLICORES", "100")),
             memory_floor_mi=int(_env("MEMORY_FLOOR_MI", "32")),
-            admin_token=_env("ADMIN_TOKEN"),
+            cpu_limit_floor_m=int(_env("CPU_LIMIT_FLOOR_MILLICORES", "250")),
+            admin_user=_env("ADMIN_USER", "passuser"),
+            admin_secret=_env("ADMIN_SECRET", "resource-advisor-admin"),
+            admin_file=_env("ADMIN_FILE"),
             formula_file=_env("FORMULA_FILE"),
+            allow_cluster_changes=_env("ALLOW_CLUSTER_CHANGES", "false").lower() == "true",
         )

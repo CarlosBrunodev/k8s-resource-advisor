@@ -65,7 +65,7 @@ class RecommendationTests(unittest.TestCase):
         wl = snap["workloads"][0]
         cpu_lim = item(wl, "app", "cpu", "limit")
         mem_lim = item(wl, "app", "memory", "limit")
-        self.assertEqual(cpu_lim["suggested"], 240)      # 200m × 1,2 e nunca abaixo do request sugerido
+        self.assertEqual(cpu_lim["suggested"], 250)      # 200m × 1,2 = 240m, elevado ao piso de 250m
         self.assertEqual(cpu_lim["status"], "superdimensionado")  # 500m configurado
         self.assertEqual(mem_lim["suggested"], 360)      # pico 300Mi × 1,2
         self.assertEqual(mem_lim["status"], "superdimensionado")
@@ -106,7 +106,52 @@ class RecommendationTests(unittest.TestCase):
         snap, _ = run(fake)
         cpu_lim = item(snap["workloads"][0], "app", "cpu", "limit")
         self.assertEqual(cpu_lim["status"], "subdimensionado")
-        self.assertIn("Throttling", cpu_lim["justification"])
+        self.assertEqual(cpu_lim["statusReason"], "throttling")
+        self.assertIn("Status definido por throttling", cpu_lim["justification"])
+        self.assertIn("P99", cpu_lim["method"])
+
+    def test_throttling_steps_up_from_current_limit(self):
+        fake = base_fake()
+        fake.pods[0]["lim_cpu"] = 0.5          # limit atual 500m, consumo constante 200m
+        fake.pods[0]["throttle"] = 0.2
+        snap, _ = run(fake)
+        cpu_lim = item(snap["workloads"][0], "app", "cpu", "limit")
+        self.assertEqual(cpu_lim["suggested"], 600)   # 500m × 1,2, acima do P99 (240m)
+        self.assertEqual(cpu_lim["adjustment"], 100)
+
+    def test_throttling_uses_p99_when_it_is_higher_than_the_step(self):
+        fake = base_fake()
+        fake.pods[0]["lim_cpu"] = 0.1          # 100m × 1,2 = 120m < P99 200m × 1,2 = 240m, e abaixo do piso
+        fake.pods[0]["throttle"] = 0.2
+        snap, _ = run(fake)
+        cpu_lim = item(snap["workloads"][0], "app", "cpu", "limit")
+        self.assertEqual(cpu_lim["suggested"], 250)   # piso de 250m
+        self.assertEqual(cpu_lim["reference"], 200)
+
+    def test_cpu_floors_apply_to_request_and_limit(self):
+        fake = base_fake()
+        fake.pods[0]["cpu"] = 0.02             # consumo de 20m: abaixo dos pisos
+        fake.pods[0]["req_cpu"] = 0.1
+        fake.pods[0]["lim_cpu"] = 0.5
+        snap, _ = run(fake)
+        wl = snap["workloads"][0]
+        cpu_req = item(wl, "app", "cpu", "request")
+        cpu_lim = item(wl, "app", "cpu", "limit")
+        self.assertEqual(cpu_req["suggested"], 100)   # piso de request
+        self.assertEqual(cpu_lim["suggested"], 250)   # piso de limit
+        self.assertIn("Mínimo de boa prática de CPU aplicado: 100m", cpu_req["justification"])
+        self.assertIn("Mínimo de boa prática de CPU aplicado: 250m", cpu_lim["justification"])
+
+    def test_floor_is_not_reported_when_calculation_is_above_it(self):
+        snap, _ = run(base_fake())
+        cpu_req = item(snap["workloads"][0], "app", "cpu", "request")
+        self.assertNotIn("Mínimo de boa prática", cpu_req["justification"])
+
+    def test_without_throttling_no_status_reason(self):
+        snap, _ = run(base_fake())
+        cpu_lim = item(snap["workloads"][0], "app", "cpu", "limit")
+        self.assertIsNone(cpu_lim["statusReason"])
+        self.assertIn("P99", cpu_lim["method"])
 
     def test_oom_marks_memory_limit_as_under_sized(self):
         fake = base_fake()
@@ -114,6 +159,7 @@ class RecommendationTests(unittest.TestCase):
         snap, _ = run(fake)
         mem_lim = item(snap["workloads"][0], "app", "memory", "limit")
         self.assertEqual(mem_lim["status"], "subdimensionado")
+        self.assertEqual(mem_lim["statusReason"], "oom")
         self.assertIn("OOMKilled", mem_lim["justification"])
 
 

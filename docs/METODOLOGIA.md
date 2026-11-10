@@ -154,7 +154,7 @@ request sugerido = max(piso, referência × (1 + margem_request))
 |---|---|---|
 | Percentil | P95 | Cobre a maior parte do tempo sem reservar o pico absoluto |
 | Margem | 20% | Folga para variações normais que não aparecem no histórico |
-| Piso | 10m CPU, 32Mi memória | Evita sugestões nulas para containers ociosos |
+| Piso | 100m CPU, 32Mi memória | Boa prática do time: o boot das aplicações precisa de mais que 10m; nunca sugerir abaixo disso |
 
 Exemplo do enunciado: request de 100m com referência de 200m e margem de 20% resultam em **240m** sugeridos, **+140m** de ajuste.
 
